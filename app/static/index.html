@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DB Service Console</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20260323-2" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">Admin console</div>
+        <h1>DB Service</h1>
+      </div>
+
+      <div class="topbar-actions">
+        <div class="status-row">
+          <span id="health-badge" class="badge badge-neutral">API: неизвестно</span>
+          <span id="db-badge" class="badge badge-neutral">БД: неизвестно</span>
+        </div>
+        <div id="db-status-text" class="muted"></div>
+        <button id="refresh-all" class="btn btn-secondary">Обновить всё</button>
+      </div>
+    </header>
+
+    <section class="auth-card">
+      <div class="auth-copy">
+        <div class="section-title">Токен доступа</div>
+        <p class="muted">Логика токена сохранена: значение хранится в <code>localStorage</code> под ключом <code>dbsvc_token</code> и автоматически подставляется в <code>Authorization: Bearer ...</code>.</p>
+      </div>
+      <div class="auth-controls">
+        <input id="token-input" type="password" placeholder="DBSVC_ADMIN_TOKEN" />
+        <button id="save-token" class="btn">Сохранить</button>
+        <button id="clear-token" class="btn btn-secondary">Очистить</button>
+      </div>
+      <div id="token-status" class="muted"></div>
+    </section>
+
+    <nav class="tabs">
+      <button id="tab-explorer" class="tab active">База данных</button>
+      <button id="tab-imports" class="tab">Импорт</button>
+      <button id="tab-minio" class="tab">MinIO</button>
+    </nav>
+
+    <main class="panel-stack">
+      <section id="panel-explorer" class="panel active">
+        <div class="layout-grid">
+          <aside class="sidebar card">
+            <div class="sidebar-head">
+              <div>
+                <div class="section-title">Структура БД</div>
+                <div class="muted">Выбери схему и таблицу</div>
+              </div>
+              <button id="reload-schemas" class="btn btn-secondary btn-small">Обновить</button>
+            </div>
+
+            <label class="field">
+              <span>Фильтр по схемам</span>
+              <input id="schema-filter" type="text" placeholder="Например: library" />
+            </label>
+
+            <div id="schema-list" class="schema-list"></div>
+          </aside>
+
+          <section class="content-stack">
+            <div class="card">
+              <div class="content-head">
+                <div>
+                  <div class="section-title">Текущая таблица</div>
+                  <div id="current-table" class="table-title">Ничего не выбрано</div>
+                </div>
+                <div class="content-actions">
+                  <button id="refresh-table" class="btn btn-secondary">Обновить таблицу</button>
+                </div>
+              </div>
+
+              <div class="info-grid">
+                <div class="info-box">
+                  <div class="info-label">Схема</div>
+                  <div id="info-schema" class="info-value">—</div>
+                </div>
+                <div class="info-box">
+                  <div class="info-label">Таблица</div>
+                  <div id="info-table" class="info-value">—</div>
+                </div>
+                <div class="info-box">
+                  <div class="info-label">Колонок</div>
+                  <div id="info-columns" class="info-value">0</div>
+                </div>
+                <div class="info-box">
+                  <div class="info-label">Строк всего</div>
+                  <div id="info-total" class="info-value">0</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="section-title">Колонки</div>
+              <div id="columns-wrap" class="chips-wrap empty-state">Сначала выбери таблицу</div>
+            </div>
+
+            <div class="card">
+              <div class="content-head form-head">
+                <div>
+                  <div class="section-title">Просмотр строк</div>
+                  <div class="muted">Серверная пагинация и сортировка</div>
+                </div>
+              </div>
+
+              <div class="toolbar-grid">
+                <label class="field">
+                  <span>Limit</span>
+                  <input id="rows-limit" type="number" min="1" max="500" value="50" />
+                </label>
+                <label class="field">
+                  <span>Offset</span>
+                  <input id="rows-offset" type="number" min="0" value="0" />
+                </label>
+                <label class="field">
+                  <span>Order by</span>
+                  <input id="rows-order" type="text" placeholder="column_name" />
+                </label>
+                <label class="field grow">
+                  <span>Быстрый поиск по загруженным строкам</span>
+                  <input id="rows-search" type="text" placeholder="Фильтрует только текущую страницу" />
+                </label>
+                <div class="field actions-field">
+                  <span>&nbsp;</span>
+                  <button id="load-rows" class="btn">Загрузить</button>
+                </div>
+              </div>
+
+              <div id="rows-summary" class="muted rows-summary">Нет загруженных данных</div>
+              <div id="table-wrap" class="table-wrap empty-state">Выбери таблицу, чтобы увидеть строки</div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="panel-imports" class="panel">
+        <div class="content-stack">
+          <div class="card">
+            <div class="section-title">Обычный CSV импорт</div>
+            <div class="muted">Импортирует CSV в уже существующую таблицу. Сначала выбери таблицу в разделе «База данных».</div>
+
+            <div class="toolbar-grid compact-top">
+              <label class="field grow">
+                <span>Выбранная таблица</span>
+                <input id="import-target" type="text" disabled placeholder="Сначала выбери таблицу" />
+              </label>
+              <label class="field grow">
+                <span>CSV файл</span>
+                <input id="csv-file" type="file" accept=".csv,text/csv" />
+              </label>
+              <label class="field">
+                <span>Mode</span>
+                <select id="csv-mode">
+                  <option value="append">append</option>
+                  <option value="replace">replace</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Delimiter</span>
+                <input id="csv-delimiter" type="text" maxlength="1" value="," />
+              </label>
+              <label class="field">
+                <span>Encoding</span>
+                <input id="csv-encoding" type="text" value="utf-8" />
+              </label>
+              <div class="field actions-field">
+                <span>&nbsp;</span>
+                <button id="run-csv-import" class="btn">Запустить импорт</button>
+              </div>
+            </div>
+
+            <pre id="csv-import-result" class="result-box">Результат появится здесь.</pre>
+          </div>
+
+          <div class="card">
+            <div class="content-head form-head">
+              <div>
+                <div class="section-title">Связанный импорт по алгоритму remap old_id → UUID</div>
+                <div class="muted">Загрузи полный набор CSV. Сервис создаст UUID в памяти, перемапит связи и scope_json, затем выполнит импорт одной транзакцией.</div>
+              </div>
+              <div class="content-actions">
+                <div id="dataset-status" class="badge badge-neutral">Проверка роута…</div>
+                <button id="refresh-dataset-status" class="btn btn-secondary">Проверить</button>
+              </div>
+            </div>
+
+            <div class="toolbar-grid compact-top">
+              <label class="field grow">
+                <span>core - universities.csv</span>
+                <input id="dataset-universities" type="file" accept=".csv,text/csv" />
+              </label>
+              <label class="field grow">
+                <span>core - campuses.csv</span>
+                <input id="dataset-campuses" type="file" accept=".csv,text/csv" />
+              </label>
+              <label class="field grow">
+                <span>core - faculties.csv</span>
+                <input id="dataset-faculties" type="file" accept=".csv,text/csv" />
+              </label>
+              <label class="field grow">
+                <span>core - buildings.csv</span>
+                <input id="dataset-buildings" type="file" accept=".csv,text/csv" />
+              </label>
+              <label class="field grow">
+                <span>core - programs.csv</span>
+                <input id="dataset-programs" type="file" accept=".csv,text/csv" />
+              </label>
+              <label class="field grow">
+                <span>library - topics.csv</span>
+                <input id="dataset-topics" type="file" accept=".csv,text/csv" />
+              </label>
+              <label class="field grow">
+                <span>library - documents.csv</span>
+                <input id="dataset-documents" type="file" accept=".csv,text/csv" />
+              </label>
+              <label class="field grow">
+                <span>library - document relations.csv</span>
+                <input id="dataset-relations" type="file" accept=".csv,text/csv" />
+              </label>
+            </div>
+
+            <div class="inline-options compact-top">
+              <label><input id="dataset-replace" type="checkbox" /> replace_mode</label>
+              <label><input id="dataset-dry-run" type="checkbox" checked /> dry_run</label>
+              <button id="run-dataset-import" class="btn">Запустить связанный импорт</button>
+            </div>
+
+            <pre id="dataset-import-result" class="result-box">Результат и логи появятся здесь.</pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="panel-minio" class="panel">
+        <div class="content-stack">
+          <div class="card">
+            <div class="content-head form-head">
+              <div>
+                <div class="section-title">Загрузка в MinIO</div>
+                <div class="muted">Файл загружается по presigned URL.</div>
+              </div>
+            </div>
+
+            <div class="toolbar-grid compact-top">
+              <label class="field grow">
+                <span>Key</span>
+                <input id="minio-key" type="text" placeholder="path/to/file.ext" />
+              </label>
+              <label class="field grow">
+                <span>Файл</span>
+                <input id="minio-file" type="file" />
+              </label>
+              <div class="field actions-field">
+                <span>&nbsp;</span>
+                <button id="run-minio-upload" class="btn">Загрузить</button>
+              </div>
+            </div>
+
+            <pre id="minio-upload-result" class="result-box">Результат появится здесь.</pre>
+          </div>
+
+          <div class="card">
+            <div class="content-head">
+              <div>
+                <div class="section-title">Объекты MinIO</div>
+                <div class="muted">Список до 200 файлов</div>
+              </div>
+              <div class="content-actions">
+                <button id="refresh-minio" class="btn btn-secondary">Обновить</button>
+              </div>
+            </div>
+
+            <div id="minio-list" class="object-list empty-state">Список ещё не загружен</div>
+          </div>
+
+          <div class="card">
+            <div class="content-head form-head">
+              <div>
+                <div class="section-title">Импорт документов в MinIO</div>
+                <div class="muted">Матчинг идет по library.documents.title = имени файла без расширения. После загрузки обновляются checksum и status = published.</div>
+              </div>
+              <div class="content-actions">
+                <button id="refresh-minio-plan" class="btn btn-secondary">Обновить правила</button>
+              </div>
+            </div>
+
+            <div class="toolbar-grid compact-top">
+              <label class="field grow">
+                <span>Файлы для импорта</span>
+                <input id="minio-import-files" type="file" accept=".pdf,.docx,.html,.htm" multiple />
+              </label>
+            </div>
+
+            <div class="inline-options compact-top">
+              <label><input id="minio-import-dry-run" type="checkbox" checked /> dry_run</label>
+              <button id="run-minio-import" class="btn">Запустить импорт</button>
+            </div>
+
+            <pre id="minio-plan-result" class="result-box">Правила импорта появятся здесь.</pre>
+            <pre id="minio-import-result" class="result-box">Результат импорта появится здесь.</pre>
+          </div>
+
+          <div class="card">
+            <div class="content-head form-head">
+              <div>
+                <div class="section-title">Импорт HTML страниц по ссылкам из documents</div>
+                <div class="muted">Берутся только записи library.documents с content_type = html и заполненным origin_url. Уже загруженные страницы можно пропустить или перезалить принудительно.</div>
+              </div>
+              <div class="content-actions">
+                <button id="refresh-html-import-plan" type="button" class="btn btn-secondary">Обновить список</button>
+              </div>
+            </div>
+
+            <div class="toolbar-grid compact-top">
+              <label class="field">
+                <span>Limit</span>
+                <input id="html-import-limit" type="number" min="1" placeholder="Все" />
+              </label>
+            </div>
+
+            <div class="inline-options compact-top">
+              <label><input id="html-import-dry-run" type="checkbox" checked /> dry_run</label>
+              <label><input id="html-import-force" type="checkbox" /> force</label>
+              <button id="run-html-import" type="button" class="btn">Загрузить HTML из documents</button>
+            </div>
+
+            <pre id="html-import-plan-result" class="result-box">Список HTML документов появится здесь.</pre>
+            <pre id="html-import-result" class="result-box">Результат HTML импорта появится здесь.</pre>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/app.js?v=20260323-2"></script>
+</body>
+</html>
