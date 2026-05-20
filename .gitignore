@@ -1,2 +1,6 @@
 .env
 __pycache__
+CLAUDE.md
+Context.txt
+docs/
+TODO.md
