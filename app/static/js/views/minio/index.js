@@ -1,11 +1,11 @@
-// Вкладка MinIO (M9). Четыре секции:
+// Вкладка MinIO: четыре карточки в стиле страницы «База данных».
 //  1) Объекты bucket — list.js (фильтры, скачать, удалить).
 //  2) Загрузка — upload.js (presigned PUT через XHR + прогресс + retry на 403).
 //  3) Импорт файлов в БД — import-files.js (мэтчинг title → library.documents).
 //  4) Импорт HTML из documents.origin_url — import-html.js (bulk-загрузка).
 //
-// После загрузки upload-секции или импорта дёргаем list.refresh(), чтобы
-// пользователь сразу видел изменения в bucket.
+// После загрузки/импорта дёргаем list.refresh(), чтобы пользователь сразу
+// видел изменения в bucket.
 
 import { mountMinioList } from './list.js';
 import { mountMinioUpload } from './upload.js';
@@ -20,31 +20,30 @@ export const minioView = {
     root.className = 'minio-view';
     container.replaceChildren(root);
 
-    const sections = [
-      ['Объекты bucket',                                'minio-view__section--list'],
-      ['Загрузка',                                      'minio-view__section--upload'],
-      ['Импорт файлов с привязкой к library.documents', 'minio-view__section--import-files'],
-      ['Импорт HTML из library.documents.origin_url',   'minio-view__section--import-html'],
-    ].map(([title, cls]) => {
-      const section = document.createElement('section');
-      section.className = `minio-view__section ${cls}`;
-      const h = document.createElement('h3');
-      h.className = 'minio-view__section-title';
-      h.textContent = title;
-      const host = document.createElement('div');
-      section.append(h, host);
-      root.append(section);
-      return host;
-    });
+    const listCard = buildCard(
+      'Объекты bucket',
+      'Файлы в MinIO. Префикс — серверный фильтр, поиск — по текущей странице.',
+    );
+    const uploadCard = buildCard(
+      'Загрузка файлов',
+      'Загрузка по presigned URL с прогрессом. Можно выбрать несколько файлов сразу.',
+    );
+    const impFilesCard = buildCard(
+      'Импорт файлов в documents',
+      'Матч по имени файла (без расширения) ↔ library.documents.title. Сначала dry-run.',
+    );
+    const impHtmlCard = buildCard(
+      'Импорт HTML из origin_url',
+      'Скачать HTML по library.documents.origin_url и положить в MinIO. Сначала dry-run.',
+    );
+    root.append(listCard.card, uploadCard.card, impFilesCard.card, impHtmlCard.card);
 
-    const [listHost, uploadHost, impFilesHost, impHtmlHost] = sections;
-
-    const list = mountMinioList(listHost);
+    const list = mountMinioList(listCard.host);
     const refreshList = () => { try { list?.refresh?.(); } catch (_e) { /* swallow */ } };
 
-    const unmountUpload   = mountMinioUpload(uploadHost,        { onUploaded: refreshList });
-    const unmountImpFiles = mountMinioImportFiles(impFilesHost, { onImported: refreshList });
-    const unmountImpHtml  = mountMinioImportHtml(impHtmlHost,   { onImported: refreshList });
+    const unmountUpload   = mountMinioUpload(uploadCard.host,        { onUploaded: refreshList });
+    const unmountImpFiles = mountMinioImportFiles(impFilesCard.host, { onImported: refreshList });
+    const unmountImpHtml  = mountMinioImportHtml(impHtmlCard.host,   { onImported: refreshList });
 
     return () => {
       try { list?.unmount?.(); }   catch (_e) { /* swallow */ }
@@ -54,3 +53,29 @@ export const minioView = {
     };
   },
 };
+
+function buildCard(title, subtitle) {
+  const card = document.createElement('section');
+  card.className = 'card minio-view__card';
+
+  const header = document.createElement('div');
+  header.className = 'card__header';
+  const h = document.createElement('h2');
+  h.className = 'card__title';
+  h.textContent = title;
+  header.append(h);
+  card.append(header);
+
+  if (subtitle) {
+    const sub = document.createElement('div');
+    sub.className = 'card__subtitle';
+    sub.textContent = subtitle;
+    card.append(sub);
+  }
+
+  const host = document.createElement('div');
+  host.className = 'minio-view__host';
+  card.append(host);
+
+  return { card, host };
+}

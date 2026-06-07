@@ -10,7 +10,7 @@
 // потому что мы не дёргаем `request()` для самого PUT.
 
 import { createStore } from '../../state/store.js';
-import { createInput } from '../../components/form-controls.js';
+import { createInput, createFilePicker } from '../../components/form-controls.js';
 import { toast } from '../../components/toast.js';
 import { presignUpload } from '../../api/minio.js';
 import { startOperation } from '../../state/operations.js';
@@ -55,12 +55,13 @@ export function mountMinioUpload(container, { onUploaded } = {}) {
     prefixLbl.append(sp, prefixInput);
     wrap.append(prefixLbl);
 
-    const fileInput = document.createElement('input');
-    fileInput.type = 'file';
-    fileInput.multiple = true;
-    fileInput.className = 'minio-upload__file';
-    fileInput.addEventListener('change', (e) => enqueue(Array.from(e.target.files || [])));
-    wrap.append(fileInput);
+    const filePicker = createFilePicker({
+      multiple: true,
+      label: 'Выберите файлы',
+      onChange: (files) => enqueue(files || []),
+    });
+    filePicker.classList.add('minio-upload__file');
+    wrap.append(filePicker);
 
     if (s.running) {
       const hint = document.createElement('div');

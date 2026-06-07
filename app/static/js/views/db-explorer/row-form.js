@@ -12,27 +12,31 @@
 import { openModal } from '../../components/modal.js';
 import { categorizePgType } from '../../utils/types.js';
 import { toast } from '../../components/toast.js';
-import { createInput, createTextarea, createCheckbox } from '../../components/form-controls.js';
+import { createInput, createTextarea, createCheckbox, createSelect } from '../../components/form-controls.js';
 import { createFkPicker } from './fk-picker.js';
+import { getColumnEnum } from '../../mocks/db-enums.js';
+import { USE_MOCK_CRUD } from '../../mocks/index.js';
 
 const AUTO_MANAGED = new Set(['id', 'created_at', 'updated_at']);
 
-export function openRowForm({ mode, columns, row = null, selection, relations = [], onSubmit }) {
+export function openRowForm({ mode, columns, row = null, selection, relations = [], enums = {}, onSubmit }) {
   const fkByColumn = new Map();
   for (const rel of relations) fkByColumn.set(rel.column, rel);
   const body = document.createElement('div');
   body.className = 'row-form';
 
-  const banner = document.createElement('div');
-  banner.className = 'row-form__notice';
-  banner.textContent = 'Mock CRUD (P-001): изменения живут в памяти текущей сессии браузера.';
-  body.append(banner);
+  if (USE_MOCK_CRUD) {
+    const banner = document.createElement('div');
+    banner.className = 'row-form__notice';
+    banner.textContent = 'Mock CRUD (P-001): изменения живут в памяти текущей сессии браузера.';
+    body.append(banner);
+  }
 
   const fields = new Map();
   for (const col of columns) {
     if (mode === 'create' && AUTO_MANAGED.has(col.name)) continue;
     const rel = fkByColumn.get(col.name) || null;
-    const field = buildField(col, row?.[col.name], mode, rel);
+    const field = buildField(col, row?.[col.name], mode, rel, selection, enums);
     fields.set(col.name, field);
     body.append(field.element);
   }
@@ -87,7 +91,7 @@ export function openRowForm({ mode, columns, row = null, selection, relations = 
   });
 }
 
-function buildField(col, value, mode, relation) {
+function buildField(col, value, mode, relation, selection, enums = {}) {
   const wrap = document.createElement('div');
   wrap.className = 'row-form__field';
 
@@ -101,11 +105,30 @@ function buildField(col, value, mode, relation) {
   const isAutoManaged = mode === 'edit' && AUTO_MANAGED.has(col.name);
   const isPk = mode === 'edit' && col.name === 'id';
   const readonly = isAutoManaged || isPk;
+  const enumValues = (enums && enums[col.name])
+    || (selection ? getColumnEnum(selection.schema, selection.table, col.name) : null);
 
   let input;
   let read;
 
-  if (relation && !readonly) {
+  if (enumValues && !readonly) {
+    // Колонка с CHECK (col IN (...)) → выпадающий список допустимых значений.
+    const opts = [];
+    if (col.nullable) opts.push({ value: '', label: '—' });
+    const cur = value == null ? '' : String(value);
+    if (cur && !enumValues.includes(cur)) opts.push({ value: cur, label: cur });
+    for (const v of enumValues) opts.push({ value: v, label: v });
+    const sel = createSelect({ value: cur, options: opts });
+    input = sel;
+    read = () => {
+      const v = sel.value;
+      if (v === '' || v === null) {
+        if (!col.nullable && mode === 'create') throw new Error('Обязательное поле');
+        return null;
+      }
+      return v;
+    };
+  } else if (relation && !readonly) {
     // FK-колонка → выпадающий выбор из связанной таблицы.
     const picker = createFkPicker({
       value,

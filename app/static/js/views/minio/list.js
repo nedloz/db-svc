@@ -106,6 +106,7 @@ export function mountMinioList(container) {
     const summary = document.createElement('div');
     summary.className = 'minio-list__summary';
     let summaryText = `Bucket: ${s.bucket || '—'} · показано: ${visible.length} из ${s.items.length}`;
+    // TODO(backend): P-009 — pagination via continuation_token (бэк хардкодит MaxKeys=200).
     if (s.items.length >= 200) summaryText += ' · лимит API (200) — уточните prefix, чтобы увидеть больше';
     summary.textContent = summaryText;
     wrap.append(summary);

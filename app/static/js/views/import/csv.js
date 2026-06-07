@@ -11,12 +11,12 @@
 // см. PROBLEMS.md → P-007.
 
 import { createStore } from '../../state/store.js';
-import { createInput, createSelect, createField } from '../../components/form-controls.js';
+import { createInput, createSelect, createField, createFilePicker } from '../../components/form-controls.js';
 import { createLoader } from '../../components/loader.js';
 import { createErrorView } from '../../components/error-view.js';
 import { toast } from '../../components/toast.js';
 import { getSchemas, getTables, getColumns, importCsv } from '../../api/db.js';
-import { parseCsv, countCsvLines, compareColumns, readFileAsText } from '../../utils/csv.js';
+import { parseCsv, countCsvLines, compareColumns, validateCsvTypes, readFileAsText } from '../../utils/csv.js';
 
 const PREVIEW_BYTES = 64 * 1024;   // первые 64 КБ для превью
 const PREVIEW_ROWS = 20;
@@ -54,9 +54,13 @@ export function mountCsvImport(container) {
     root.replaceChildren();
     root.append(buildForm(s));
     if (s.previewError) root.append(buildPreviewError(s.previewError));
-    if (s.preview) root.append(buildPreview(s));
+    // Сверка колонок и предупреждения типов — сразу под кнопками, над превью.
     if (s.preview && s.columns.length) root.append(buildComparison(s));
-    root.append(buildActions(s));
+    if (s.preview && s.columns.length) {
+      const typeWarn = buildTypeCheck(s);
+      if (typeWarn) root.append(typeWarn);
+    }
+    if (s.preview) root.append(buildPreview(s));
     if (s.error) root.append(createErrorView(s.error));
     if (s.result) root.append(buildResult(s.result));
   }
@@ -176,23 +180,27 @@ export function mountCsvImport(container) {
 
   function buildForm(s) {
     const wrap = document.createElement('div');
-    wrap.className = 'csv-import__form';
+    wrap.className = 'csv-import__form-wrap';
+
+    // ----- Группа 1: схема / таблица / режим (один ряд) -----
+    const top = document.createElement('div');
+    top.className = 'csv-import__form';
 
     const schemaSelect = createSelect({
       value: s.selectedSchema,
-      options: [{ value: '', label: '— выберите схему —' }, ...s.schemas.map((sc) => ({ value: sc, label: sc }))],
+      options: [{ value: '', label: 'выберите схему' }, ...s.schemas.map((sc) => ({ value: sc, label: sc }))],
       onChange: onSchemaChange,
     });
-    wrap.append(createField({ label: 'Схема', control: schemaSelect }));
+    top.append(createField({ label: 'Схема', control: schemaSelect }));
 
     const tableList = s.tables[s.selectedSchema] || [];
     const tableSelect = createSelect({
       value: s.selectedTable,
-      options: [{ value: '', label: s.loading.tables ? 'Загружаю…' : '— выберите таблицу —' }, ...tableList.map((t) => ({ value: t, label: t }))],
+      options: [{ value: '', label: s.loading.tables ? 'Загружаю…' : 'выберите таблицу' }, ...tableList.map((t) => ({ value: t, label: t }))],
       onChange: onTableChange,
     });
     if (!s.selectedSchema) tableSelect.disabled = true;
-    wrap.append(createField({ label: 'Таблица', control: tableSelect }));
+    top.append(createField({ label: 'Таблица', control: tableSelect }));
 
     const modeWrap = document.createElement('span');
     modeWrap.className = 'csv-import__mode';
@@ -205,7 +213,47 @@ export function mountCsvImport(container) {
       lbl.append(r, sp);
       modeWrap.append(lbl);
     }
-    wrap.append(createField({ label: 'Режим', control: modeWrap }));
+    top.append(createField({ label: 'Режим', control: modeWrap }));
+
+    // ----- Группа 2: разделитель / кодировка / файл (сетка 2×2) -----
+    const files = document.createElement('div');
+    files.className = 'csv-import__form-files';
+
+    const delimInput = createInput({ value: s.delimiter, onInput: onDelimiterChange });
+    delimInput.maxLength = 1;
+    files.append(createField({ label: 'Разделитель (1 символ)', control: delimInput }));
+
+    const encSelect = createSelect({
+      value: s.encoding, options: ENCODINGS, onChange: onEncodingChange,
+    });
+    files.append(createField({ label: 'Кодировка', control: encSelect }));
+
+    // Поле файла — кастомный picker. ВАЖНО: не оборачиваем в createField (это
+    // <label>), иначе вся область поля становится кликабельной и открывает выбор
+    // файла. Делаем div с подписью-спаном.
+    const fileField = document.createElement('div');
+    fileField.className = 'field';
+    const fileLabel = document.createElement('span');
+    fileLabel.className = 'field__label';
+    fileLabel.textContent = 'CSV-файл';
+    const filePicker = createFilePicker({
+      accept: '.csv,text/csv',
+      label: s.file ? 'Заменить файл' : 'Выберите файл',
+      onChange: (file) => onFileChange(file),
+    });
+    fileField.append(fileLabel, filePicker);
+    files.append(fileField);
+
+    // Левая колонка: поля (схема/таблица/режим) + действия (Импортировать/Убрать).
+    const leftCol = document.createElement('div');
+    leftCol.className = 'csv-import__form-left';
+    leftCol.append(top, buildActions(s));
+
+    // Левая колонка и 2×2 (справа) в одном ряду — без вертикальной пустоты.
+    const row = document.createElement('div');
+    row.className = 'csv-import__form-row';
+    row.append(leftCol, files);
+    wrap.append(row);
 
     if (s.mode === 'replace') {
       const warn = document.createElement('div');
@@ -214,28 +262,6 @@ export function mountCsvImport(container) {
       wrap.append(warn);
     }
 
-    const delimInput = createInput({ value: s.delimiter, onInput: onDelimiterChange });
-    delimInput.maxLength = 1;
-    wrap.append(createField({ label: 'Разделитель (1 символ)', control: delimInput }));
-
-    const encSelect = createSelect({
-      value: s.encoding, options: ENCODINGS, onChange: onEncodingChange,
-    });
-    wrap.append(createField({ label: 'Кодировка', control: encSelect }));
-
-    const fileInput = document.createElement('input');
-    fileInput.type = 'file';
-    fileInput.accept = '.csv,text/csv';
-    fileInput.className = 'csv-import__file';
-    fileInput.addEventListener('change', (e) => onFileChange(e.target.files[0] || null));
-    wrap.append(createField({ label: 'CSV-файл', control: fileInput }));
-
-    if (s.file) {
-      const fileInfo = document.createElement('div');
-      fileInfo.className = 'csv-import__file-info';
-      fileInfo.textContent = `${s.file.name} · ${formatBytes(s.file.size)}`;
-      wrap.append(fileInfo);
-    }
     return wrap;
   }
 
@@ -312,6 +338,8 @@ export function mountCsvImport(container) {
       'Эти колонки бэк не примет — COPY упадёт. Удалите их из CSV или переименуйте.',
     ));
     if (cmp.orderMismatch) {
+      // TODO(backend): P-008 — header-based column mapping; убрать этот warning,
+      // когда бэк начнёт делать COPY table(col1, col2, ...) по парсингу header.
       const o = document.createElement('div');
       o.className = 'csv-import__cmp-order';
       o.textContent = '⚠ Порядок CSV-колонок не совпадает с порядком в таблице. ' +
@@ -324,6 +352,45 @@ export function mountCsvImport(container) {
       ok.textContent = '✓ Колонки совпадают с таблицей, порядок верный.';
       wrap.append(ok);
     }
+    return wrap;
+  }
+
+  function buildTypeCheck(s) {
+    const problems = validateCsvTypes(s.preview.headers, s.preview.rows, s.columns);
+    if (!problems.length) return null;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'csv-import__type-check';
+
+    const title = document.createElement('div');
+    title.className = 'csv-import__type-check-title';
+    title.textContent = `⚠ Несоответствие типов (${problems.length} ${problems.length === 1 ? 'колонка' : 'колонки/колонок'})`;
+    wrap.append(title);
+
+    const hint = document.createElement('div');
+    hint.className = 'csv-import__type-check-hint';
+    hint.textContent = 'Проверка по первым строкам превью. COPY на бэке упадёт с 22P02 ' +
+      '(invalid input syntax) на каждой такой строке. Исправь CSV до запуска импорта.';
+    wrap.append(hint);
+
+    const list = document.createElement('ul');
+    list.className = 'csv-import__type-check-list';
+    for (const p of problems) {
+      const li = document.createElement('li');
+      li.className = 'csv-import__type-check-item';
+      const head = document.createElement('div');
+      head.className = 'csv-import__type-check-col';
+      head.textContent = `${p.column} (${p.type})`;
+      const samples = document.createElement('div');
+      samples.className = 'csv-import__type-check-samples';
+      samples.textContent = `В CSV: ${p.samples.map((s) => `"${s}"`).join(', ')}`;
+      const hintLine = document.createElement('div');
+      hintLine.className = 'csv-import__type-check-explain';
+      hintLine.textContent = p.hint;
+      li.append(head, samples, hintLine);
+      list.append(li);
+    }
+    wrap.append(list);
     return wrap;
   }
 
@@ -352,6 +419,19 @@ export function mountCsvImport(container) {
     btn.disabled = s.busy || !s.selectedSchema || !s.selectedTable || !s.file;
     btn.addEventListener('click', submit);
     wrap.append(btn);
+
+    if (s.file) {
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'btn btn--danger csv-import__file-remove';
+      removeBtn.textContent = 'Убрать';
+      removeBtn.disabled = !!s.busy;
+      removeBtn.addEventListener('click', () => onFileChange(null));
+      const info = document.createElement('span');
+      info.className = 'csv-import__file-info';
+      info.textContent = `${s.file.name} · ${formatBytes(s.file.size)}`;
+      wrap.append(removeBtn, info);
+    }
 
     if (s.busy) {
       const hint = document.createElement('span');

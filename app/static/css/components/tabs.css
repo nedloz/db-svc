@@ -1,0 +1,30 @@
+/* Табы навигации (База Данных / Импорт / MinIO). */
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-5);
+  min-width: 110px;
+  background: var(--bg-button-dark);
+  color: var(--text-primary);
+  border-radius: var(--r-md);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+
+.tab:hover {
+  background: #1a1a20;
+}
+
+.tab--active {
+  background: var(--bg-button-light);
+  color: var(--text-inverse);
+}
+
+.tab--active:hover {
+  background: var(--bg-button-light);
+}

@@ -52,6 +52,33 @@ export function createSelect({ value = '', options = [], onChange = null } = {})
   return el;
 }
 
+// Кастомный выбор файла: кнопка-пилюля без нативного текста «Файл не выбран»
+// и без «мёртвой» кликзоны (нативный input визуально скрыт, клик по label).
+// Имя выбранного файла показывает вызывающий код отдельно (через onChange).
+export function createFilePicker({ accept = '', multiple = false, label = 'Выберите файл', onChange = null } = {}) {
+  const wrap = document.createElement('label');
+  wrap.className = 'file-picker';
+
+  const input = document.createElement('input');
+  input.type = 'file';
+  if (accept) input.accept = accept;
+  if (multiple) input.multiple = true;
+  input.className = 'file-picker__input';
+  if (onChange) {
+    input.addEventListener('change', (e) => {
+      const files = Array.from(e.target.files || []);
+      onChange(multiple ? files : (files[0] || null), e);
+    });
+  }
+
+  const btn = document.createElement('span');
+  btn.className = 'btn file-picker__button';
+  btn.textContent = label;
+
+  wrap.append(input, btn);
+  return wrap;
+}
+
 export function createCheckbox({ checked = false, label = '', onChange = null } = {}) {
   const wrap = document.createElement('label');
   wrap.className = 'field';

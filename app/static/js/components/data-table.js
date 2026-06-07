@@ -1,37 +1,53 @@
 // Data-table с поддержкой:
-//  - кликабельных заголовков (сортировка);
-//  - типизированных рендереров ячеек;
-//  - выбор строк через чекбоксы (M5, опционально через rowKey + selection);
-//  - inline-edit одной ячейки (M5, dblclick → input → Enter / Escape).
+//  - Клик по заголовку колонки → onColumnHeaderClick(column) (для sort-modal).
+//  - Клик по строке → активная строка (onActiveRowChange).
+//  - Двойной клик по строке → onRowClick (детали).
+//  - Чекбоксы выбора строк (bulk-операции).
+//  - Inline row-edit: если editingRowKey совпадает с rowKey(row), вся строка
+//    рендерится в режиме редактирования (input / dropdown / readonly), и в
+//    конце ряда — кнопки Очистить / ок.
 //
-// FK-ссылки и расширенный selection — M6.
+// Edit-режим:
+//   - col.editKind === 'enum' с пустым col.enumValues → рендерим disabled
+//     <select> с треугольником (для UI-намёка, см. P-011).
+//   - col.editKind === 'checkbox' → чекбокс.
+//   - col.editKind === 'textarea' → textarea.
+//   - col.editKind === 'input' → <input> с правильным типом.
+//   - col.editable === false → ячейка остаётся read-only, но визуально приглушена.
 
-const EDIT_KIND_INPUT = 'input';
-const EDIT_KIND_TEXTAREA = 'textarea';
-const EDIT_KIND_CHECKBOX = 'checkbox';
+const KIND_INPUT = 'input';
+const KIND_TEXTAREA = 'textarea';
+const KIND_CHECKBOX = 'checkbox';
+const KIND_ENUM = 'enum';
 
 export function createDataTable({
-  columns = [],         // [{ key, label, sortable, editable, editKind, parse?, format?, render?(value, row) }]
+  columns = [],
   rows = [],
-  sort = null,          // { key } — текущая сортировка (направление пока всегда asc, см. P-002)
-  onSortChange = null,
-  onRowClick = null,
-  onCellEdit = null,    // ({ row, column, value }) => Promise|void — возврат отказа кидать исключением
-  rowKey = null,        // (row) => any — обязательно для selection
-  selection = null,     // Set значений rowKey(row) — управляется снаружи
-  onSelectionChange = null, // (newSet: Set) => void
+  sort = null,                  // { key, dir } — текущая сортировка
+  onColumnHeaderClick = null,   // (column) => void — открывает sort-modal
+  columnTools = false,          // показывать треугольники в шапке + клик по ним (Excel-режим)
+  cellMode = 'fit',             // 'fit' (всё помещается) | 'ellipsis' (одна строка) | 'wrap' (перенос)
+  onRowClick = null,            // (row) => void — двойной клик
+  onActiveRowChange = null,     // (rowKey|null) => void — одиночный клик
+  activeRowKey = null,          // ключ активной (выбранной) строки
+  editingRowKey = null,         // ключ редактируемой строки
+  onRowEditCommit = null,       // (row, changes) => Promise — сохранить все изменения
+  onRowEditCancel = null,       // () => void — отменить
+  rowKey = null,                // (row) => any
+  selection = null,             // Set (bulk-select checkboxes)
+  onSelectionChange = null,
   emptyState = null,
 } = {}) {
   const wrap = document.createElement('div');
-  wrap.className = 'data-table-wrapper';
+  const wrapMode = cellMode === 'wrap' ? 'wrap' : cellMode === 'ellipsis' ? 'ellipsis' : 'fit';
+  wrap.className = `data-table-wrapper data-table-wrapper--${wrapMode}`;
 
   const selectable = !!(rowKey && onSelectionChange);
-  const editable = !!onCellEdit;
+  const editing = editingRowKey != null;
 
   if (!rows.length) {
-    if (emptyState instanceof Node) {
-      wrap.append(emptyState);
-    } else {
+    if (emptyState instanceof Node) wrap.append(emptyState);
+    else {
       const empty = document.createElement('div');
       empty.className = 'empty-state';
       empty.textContent = 'Пусто';
@@ -40,10 +56,17 @@ export function createDataTable({
     return wrap;
   }
 
-  const ctx = { columns, rows, sort, onSortChange, onRowClick, onCellEdit, rowKey, selection, onSelectionChange, selectable, editable };
+  const ctx = {
+    columns, rows, sort, onColumnHeaderClick, columnTools, onRowClick, onActiveRowChange,
+    activeRowKey, editingRowKey, onRowEditCommit, onRowEditCancel,
+    rowKey, selection, onSelectionChange, selectable, editing,
+  };
 
   const table = document.createElement('table');
-  table.className = 'data-table';
+  const modeClass = cellMode === 'wrap' ? 'data-table--wrap'
+    : cellMode === 'ellipsis' ? 'data-table--ellipsis'
+    : 'data-table--fit';
+  table.className = `data-table ${modeClass}`;
   table.append(buildHead(ctx));
   table.append(buildBody(ctx));
   wrap.append(table);
@@ -51,7 +74,7 @@ export function createDataTable({
 }
 
 function buildHead(ctx) {
-  const { columns, sort, onSortChange, selectable, rows, rowKey, selection, onSelectionChange } = ctx;
+  const { columns, sort, onColumnHeaderClick, selectable, rows, rowKey, selection, onSelectionChange } = ctx;
   const thead = document.createElement('thead');
   const headRow = document.createElement('tr');
 
@@ -78,30 +101,64 @@ function buildHead(ctx) {
 
   for (const col of columns) {
     const th = document.createElement('th');
-    th.textContent = col.label ?? col.key;
-    if (col.sortable && onSortChange) {
-      th.classList.add('data-table__th--sortable');
+    th.className = 'data-table__th';
+    // Внутренний flex-контейнер: НЕ ставим display:flex на сам <th>, иначе он
+    // перестаёт быть table-cell и шапка «разворачивается» в столбец.
+    const inner = document.createElement('div');
+    inner.className = 'data-table__th-inner';
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'data-table__th-label';
+    // Zero-width space после «_» — чистый перенос «source_type» → «source_/type».
+    labelSpan.textContent = String(col.label ?? col.key).replace(/_/g, '_​');
+    inner.append(labelSpan);
+
+    // Треугольники-инструменты в шапке показываем только в Excel-режиме
+    // (включается кнопкой ⇅ в тулбаре). Иначе шапка статична.
+    if (ctx.columnTools && onColumnHeaderClick) {
+      th.classList.add('data-table__th--tool');
       const indicator = document.createElement('span');
       indicator.className = 'data-table__sort-indicator';
-      const isActive = sort && sort.key === col.key;
-      indicator.textContent = isActive ? '▴' : '·';
-      if (isActive) th.classList.add('data-table__th--sorted');
-      th.append(indicator);
-      th.addEventListener('click', () => onSortChange({ key: col.key }));
+      if (sort && sort.key === col.key) {
+        indicator.textContent = sort.dir === 'desc' ? '▾' : '▴';
+        th.classList.add('data-table__th--sorted');
+      } else {
+        indicator.textContent = '▾';
+      }
+      inner.append(indicator);
+      th.addEventListener('click', (e) => {
+        e.stopPropagation();
+        onColumnHeaderClick(col);
+      });
     }
+    th.append(inner);
     headRow.append(th);
   }
+
+  // Доп. колонка в конце для кнопок Очистить/ок при edit-режиме.
+  if (ctx.editing) {
+    const th = document.createElement('th');
+    th.className = 'data-table__th--actions';
+    headRow.append(th);
+  }
+
   thead.append(headRow);
   return thead;
 }
 
 function buildBody(ctx) {
-  const { columns, rows, onRowClick, rowKey, selection, onSelectionChange, selectable, editable } = ctx;
+  const { columns, rows, rowKey, selection, onSelectionChange, selectable,
+    activeRowKey, editingRowKey, onActiveRowChange, onRowClick, editing } = ctx;
   const tbody = document.createElement('tbody');
+
   for (const row of rows) {
     const tr = document.createElement('tr');
     const pk = rowKey ? rowKey(row) : null;
+    const isEditing = editingRowKey != null && pk === editingRowKey;
+    const isActive = activeRowKey != null && pk === activeRowKey;
+
     if (selectable && selection?.has(pk)) tr.classList.add('data-table__tr--selected');
+    if (isActive) tr.classList.add('data-table__tr--active');
+    if (isEditing) tr.classList.add('data-table__tr--editing');
 
     if (selectable) {
       const td = document.createElement('td');
@@ -121,124 +178,203 @@ function buildBody(ctx) {
       tr.append(td);
     }
 
-    let clickTimer = null;
-    for (const col of columns) {
-      const td = document.createElement('td');
-      renderCellInto(td, col, row);
+    if (isEditing) {
+      buildEditingRow(tr, row, ctx);
+    } else {
+      for (const col of columns) {
+        const td = document.createElement('td');
+        renderCellInto(td, col, row);
+        if (editing) {
+          // Чтобы readonly-ячейки не редактируемой строки визуально совпадали
+          // по высоте с edit-row, ничего не делаем — стили это сами разрулят.
+        }
+        tr.append(td);
+      }
+      if (editing) {
+        // Пустая колонка под actions, чтобы не плыла сетка.
+        tr.append(document.createElement('td'));
+      }
 
-      if (editable && col.editable) {
-        td.classList.add('data-table__td--editable');
-        td.title = (td.title ? td.title + ' · ' : '') + 'Двойной клик — редактировать';
-        td.addEventListener('dblclick', (e) => {
-          e.stopPropagation();
+      // Клик по строке → активная; двойной клик → детали.
+      if (!editing) {
+        let clickTimer = null;
+        tr.classList.add('data-table__tr--clickable');
+        tr.addEventListener('click', (e) => {
+          if (e.target.closest('input, button, textarea, select, a, .data-table__cell-fk')) return;
+          if (clickTimer) clearTimeout(clickTimer);
+          clickTimer = setTimeout(() => {
+            clickTimer = null;
+            onActiveRowChange?.(isActive ? null : pk);
+          }, 220);
+        });
+        tr.addEventListener('dblclick', (e) => {
+          if (e.target.closest('input, button, textarea, select, a, .data-table__cell-fk')) return;
           if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
-          startInlineEdit(td, col, row, ctx);
+          onRowClick?.(row);
         });
       }
-      tr.append(td);
     }
 
-    if (onRowClick) {
-      tr.classList.add('data-table__tr--clickable');
-      tr.addEventListener('click', (e) => {
-        // Не открывать детали по клику на чекбокс / inline-input / кнопку.
-        if (e.target.closest('input, button, textarea, select, .data-table__td--editing')) return;
-        // Откладываем, чтобы dblclick по editable-ячейке успел отменить.
-        if (clickTimer) clearTimeout(clickTimer);
-        clickTimer = setTimeout(() => { clickTimer = null; onRowClick(row); }, 200);
-      });
-      tr.addEventListener('dblclick', () => {
-        if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
-      });
-    }
     tbody.append(tr);
   }
   return tbody;
+}
+
+function buildEditingRow(tr, row, ctx) {
+  const { columns, onRowEditCommit, onRowEditCancel } = ctx;
+  const changes = {}; // {colKey: rawInputValue}
+  const readers = new Map();
+  const cellErrors = new Map();
+
+  for (const col of columns) {
+    const td = document.createElement('td');
+    td.className = 'data-table__td--edit';
+    const raw = row[col.key];
+
+    if (!col.editable) {
+      // Read-only ячейка в edit-режиме: тот же текст, но визуально приглушённая.
+      td.classList.add('data-table__td--edit-readonly');
+      renderCellInto(td, col, row);
+    } else {
+      const kind = col.editKind || KIND_INPUT;
+      const fieldWrap = document.createElement('div');
+      fieldWrap.className = 'data-table__edit-field';
+      let input;
+      let read;
+
+      if (kind === KIND_CHECKBOX) {
+        input = document.createElement('input');
+        input.type = 'checkbox';
+        input.className = 'data-table__edit-checkbox';
+        input.checked = !!raw;
+        read = () => input.checked;
+      } else if (kind === KIND_ENUM) {
+        const sel = document.createElement('select');
+        sel.className = 'data-table__edit-select';
+        const values = Array.isArray(col.enumValues) ? col.enumValues : [];
+        if (values.length) {
+          // Реальный выпадающий список из допустимых значений (CHECK IN).
+          if (col.nullable) {
+            const empty = document.createElement('option');
+            empty.value = '';
+            empty.textContent = '—';
+            sel.append(empty);
+          }
+          // Текущее значение, даже если его нет в списке — чтобы не потерять.
+          const all = raw != null && !values.includes(String(raw))
+            ? [String(raw), ...values] : values;
+          for (const v of all) {
+            const opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = v;
+            sel.append(opt);
+          }
+          sel.value = raw == null ? '' : String(raw);
+          read = () => (sel.value === '' ? null : sel.value);
+        } else {
+          // P-011: значений нет — disabled-заглушка с треугольником (намёк).
+          sel.disabled = true;
+          sel.title = 'Список значений станет доступен после P-011 (метаданные enum)';
+          const opt = document.createElement('option');
+          opt.textContent = raw == null ? '—' : String(raw);
+          sel.append(opt);
+          read = () => raw;
+        }
+        input = sel;
+      } else if (kind === KIND_TEXTAREA) {
+        input = document.createElement('textarea');
+        input.className = 'data-table__edit-input data-table__edit-input--textarea';
+        input.rows = 2;
+        input.value = raw == null ? '' : (typeof raw === 'object' ? JSON.stringify(raw) : String(raw));
+        read = () => input.value;
+      } else {
+        input = document.createElement('input');
+        input.className = 'data-table__edit-input';
+        input.type = col.editInputType || 'text';
+        input.value = raw == null ? '' : String(raw);
+        read = () => input.value;
+      }
+
+      const errorEl = document.createElement('div');
+      errorEl.className = 'data-table__edit-error';
+      errorEl.hidden = true;
+      cellErrors.set(col.key, errorEl);
+
+      fieldWrap.append(input, errorEl);
+      td.append(fieldWrap);
+
+      readers.set(col.key, { read, parse: col.parse, raw });
+    }
+    tr.append(td);
+  }
+
+  // Колонка с кнопками
+  const actionsTd = document.createElement('td');
+  actionsTd.className = 'data-table__td--row-actions';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'btn data-table__row-action data-table__row-action--cancel';
+  cancelBtn.textContent = 'Очистить';
+  cancelBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    onRowEditCancel?.();
+  });
+
+  const okBtn = document.createElement('button');
+  okBtn.type = 'button';
+  okBtn.className = 'btn btn--primary data-table__row-action data-table__row-action--ok';
+  okBtn.textContent = 'ок';
+  okBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    // Собираем изменения
+    let hasError = false;
+    for (const [key, errEl] of cellErrors) {
+      errEl.hidden = true;
+      errEl.textContent = '';
+    }
+    for (const [key, { read, parse, raw }] of readers) {
+      try {
+        const value = parse ? parse(read(), raw, row) : read();
+        if (!looseEq(value, raw)) changes[key] = value;
+      } catch (err) {
+        hasError = true;
+        const errEl = cellErrors.get(key);
+        if (errEl) {
+          errEl.textContent = err?.message || 'Невалидное значение';
+          errEl.hidden = false;
+        }
+      }
+    }
+    if (hasError) return;
+
+    okBtn.disabled = true;
+    cancelBtn.disabled = true;
+    try {
+      await onRowEditCommit?.(row, changes);
+    } catch (err) {
+      okBtn.disabled = false;
+      cancelBtn.disabled = false;
+      // toast покажется в parent
+    }
+  });
+
+  actionsTd.append(cancelBtn, okBtn);
+  tr.append(actionsTd);
 }
 
 function renderCellInto(td, col, row) {
   td.replaceChildren();
   const raw = row[col.key];
   const value = col.render ? col.render(raw, row) : defaultFormat(raw);
-  if (value instanceof Node) td.append(value);
-  else td.textContent = value;
-  if (typeof raw === 'string' && raw.length > 60 && !td.title) td.title = raw;
-}
-
-function startInlineEdit(td, col, row, ctx) {
-  if (td.classList.contains('data-table__td--editing')) return;
-  td.classList.add('data-table__td--editing');
-  const raw = row[col.key];
-  const kind = col.editKind || EDIT_KIND_INPUT;
-
-  const original = [...td.childNodes];
-  td.replaceChildren();
-
-  let input;
-  let getValue;
-  if (kind === EDIT_KIND_CHECKBOX) {
-    input = document.createElement('input');
-    input.type = 'checkbox';
-    input.checked = !!raw;
-    getValue = () => input.checked;
-  } else if (kind === EDIT_KIND_TEXTAREA) {
-    input = document.createElement('textarea');
-    input.className = 'textarea';
-    input.rows = 3;
-    input.value = raw == null ? '' : (typeof raw === 'object' ? JSON.stringify(raw, null, 2) : String(raw));
-    getValue = () => input.value;
-  } else {
-    input = document.createElement('input');
-    input.className = 'input';
-    input.type = 'text';
-    input.value = raw == null ? '' : String(raw);
-    getValue = () => input.value;
-  }
-  td.append(input);
-
-  const error = document.createElement('div');
-  error.className = 'data-table__edit-error';
-  error.hidden = true;
-  td.append(error);
-
-  let done = false;
-  const finish = () => {
-    if (done) return;
-    done = true;
-    td.classList.remove('data-table__td--editing');
-    td.replaceChildren(...original);
-  };
-
-  const commit = async () => {
-    if (done) return;
-    let value;
-    try {
-      value = col.parse ? col.parse(getValue(), raw, row) : getValue();
-    } catch (err) {
-      error.textContent = err.message || 'Невалидное значение';
-      error.hidden = false;
-      return;
-    }
-    if (looseEq(value, raw)) { finish(); return; }
-    input.disabled = true;
-    try {
-      await ctx.onCellEdit({ row, column: col.key, value });
-      // После успешного onCellEdit вызывающий перезагрузит строки; finish не нужен.
-    } catch (err) {
-      input.disabled = false;
-      error.textContent = err?.message || 'Ошибка сохранения';
-      error.hidden = false;
-    }
-  };
-
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { e.preventDefault(); finish(); }
-    else if (e.key === 'Enter' && kind !== EDIT_KIND_TEXTAREA) { e.preventDefault(); commit(); }
-    else if (e.key === 'Enter' && e.ctrlKey && kind === EDIT_KIND_TEXTAREA) { e.preventDefault(); commit(); }
-  });
-  input.addEventListener('blur', () => { if (!done) commit(); });
-  input.focus();
-  if (typeof input.select === 'function') input.select();
+  // Контент в обёртке: на ней работают max-width + ellipsis (single-line режим).
+  const cell = document.createElement('div');
+  cell.className = 'data-table__cell';
+  if (value instanceof Node) cell.append(value);
+  else cell.textContent = value;
+  td.append(cell);
+  // tooltip с полным значением (текст обрезается «…»)
+  if (typeof raw === 'string' && raw.length > 20 && !td.title) td.title = raw;
 }
 
 function looseEq(a, b) {

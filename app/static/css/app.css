@@ -1,0 +1,20 @@
+/* Главный CSS-entry: импорты всех стилей. */
+
+@import url('tokens.css');
+@import url('base.css');
+@import url('layout.css');
+
+@import url('components/card.css');
+@import url('components/button.css');
+@import url('components/input.css');
+@import url('components/status-badge.css');
+@import url('components/tabs.css');
+@import url('components/table.css');
+@import url('components/modal.css');
+@import url('components/toast.css');
+@import url('components/db-explorer.css');
+@import url('components/import.css');
+@import url('components/minio.css');
+@import url('components/misc.css');
+@import url('components/modals-content.css');
+@import url('components/sort-modal.css');

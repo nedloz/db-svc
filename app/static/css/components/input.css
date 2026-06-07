@@ -1,0 +1,172 @@
+/* Текстовые поля и группы. */
+
+.input {
+  background: var(--bg-inner);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  min-height: var(--h-control);
+  width: 100%;
+}
+
+.input::placeholder {
+  color: var(--text-muted);
+}
+
+.input:focus {
+  outline: 1px solid var(--border-strong);
+  outline-offset: -1px;
+}
+
+.textarea {
+  background: var(--bg-inner);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  width: 100%;
+  min-height: 80px;
+  resize: vertical;
+}
+
+.textarea:focus {
+  outline: 1px solid var(--border-strong);
+  outline-offset: -1px;
+}
+
+.input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+
+.checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-green);
+}
+
+/* «Pill»-инпут (например, token) с outline-обводкой */
+.input--pill {
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--bg-inner);
+  outline: 1px solid var(--accent-green);
+  outline-offset: -1px;
+  min-height: var(--h-control);
+}
+
+.input--pill:focus {
+  outline-color: var(--accent-green);
+}
+
+.input--pill.is-empty,
+.input--pill[data-empty="true"] {
+  outline-color: var(--border-strong);
+}
+
+/* Select — кастомный визуал. padding только горизонтальный: <select>
+ * вертикально центрирует текст сам, а большой вертикальный padding при
+ * фиксированной высоте обрезал текст (utf-8 → utf-8 с обрезкой снизу).
+ * Нативную стрелку убираем (appearance:none) и рисуем свою с отступом от
+ * правого края — нативная сидела вплотную к границе. */
+.select {
+  background: var(--bg-inner);
+  border-radius: var(--r-md);
+  padding: 0 var(--sp-7) 0 var(--sp-4);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  height: var(--h-control);
+  line-height: var(--h-control);
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><polygon points='0,0 10,0 5,6' fill='%23c7c7cc'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right var(--sp-4) center;
+}
+
+/* Field — label сверху + контрол снизу (createField / createCheckbox). */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.field__label {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text-muted);
+}
+
+/* Контролы внутри .field тянутся на всю ширину ячейки (грид формы импорта). */
+.field .select,
+.field .input {
+  width: 100%;
+}
+
+/* Чекбокс-строки (label с input[type=checkbox] + текст) — общий вид. */
+.field input[type="checkbox"],
+label > input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-green);
+  vertical-align: middle;
+}
+
+/* Радио-кнопки (CSV mode append/replace) */
+input[type="radio"] {
+  accent-color: var(--accent-green);
+  vertical-align: middle;
+}
+
+/* Кастомный file-picker: кнопка-пилюля, нативный input скрыт.
+ * width: fit-content + align-self: flex-start — чтобы кликабельная зона была
+ * ровно по кнопке, а не на всю ширину контейнера. */
+.file-picker {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  width: fit-content;
+  max-width: 100%;
+  align-self: flex-start;
+}
+
+/* Нативный input визуально скрыт (но доступен label'у для клика). */
+.file-picker__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  border: 0;
+}
+
+/* Кнопка не перехватывает клик — он уходит на label, открывая выбор файла. */
+.file-picker__button {
+  pointer-events: none;
+}
+
+/* Запасной стиль для оставшихся нативных file input (если где-то есть). */
+input[type="file"] {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  max-width: 100%;
+}
+
+/* Stat-pill — отображает label: value (Колонок: 19 / Строк: 78 / Limit: 15) */
+.stat-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-2) var(--sp-5);
+  min-width: 100px;
+  height: var(--h-control);
+  background: var(--bg-inner);
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+}

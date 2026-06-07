@@ -360,7 +360,7 @@ def _download_remote_html(url: str, timeout: int = 20) -> tuple[bytes, str | Non
     return body, content_type
 
 
-def import_remote_html_to_minio(dry_run: bool = False, limit: int | None = None, force: bool = False) -> dict[str, Any]:
+def import_remote_html_to_minio(dry_run: bool = False, limit: int | None = None, force: bool = False, progress_cb=None, cancel_check=None) -> dict[str, Any]:
     docs = _load_remote_html_documents()
     candidates = docs if force else [doc for doc in docs if not doc.storage_key]
     if limit is not None and limit > 0:
@@ -386,7 +386,12 @@ def import_remote_html_to_minio(dry_run: bool = False, limit: int | None = None,
         client = _s3_client()
         bucket = _ensure_bucket(client)
 
-    for doc in candidates:
+    total = max(len(candidates), 1)
+    for idx, doc in enumerate(candidates, 1):
+        if progress_cb is not None:
+            progress_cb(idx - 1, total, "download", f"Processing {idx}/{total}")
+        if cancel_check is not None and cancel_check():
+            raise RuntimeError("Job cancelled")
         filename = _build_html_filename(doc)
         try:
             body, response_content_type = _download_remote_html(doc.origin_url)
@@ -515,7 +520,7 @@ def import_remote_html_to_minio(dry_run: bool = False, limit: int | None = None,
     }
 
 
-def import_files_to_minio(files: list[UploadFile], dry_run: bool = False) -> dict[str, Any]:
+def import_files_to_minio(files: list[UploadFile], dry_run: bool = False, progress_cb=None, cancel_check=None) -> dict[str, Any]:
     docs_by_title, duplicates = _load_documents_map()
     stats = {
         "total_files": 0,
@@ -545,7 +550,12 @@ def import_files_to_minio(files: list[UploadFile], dry_run: bool = False) -> dic
         client = _s3_client()
         bucket = _ensure_bucket(client)
 
-    for upload in files:
+    total = max(len(files), 1)
+    for idx, upload in enumerate(files, 1):
+        if progress_cb is not None:
+            progress_cb(idx - 1, total, "upload", f"Processing {idx}/{total}")
+        if cancel_check is not None and cancel_check():
+            raise RuntimeError("Job cancelled")
         filename = upload.filename or ""
         ext = Path(filename).suffix.lower()
         stats["total_files"] += 1

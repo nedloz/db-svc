@@ -24,7 +24,7 @@ MINIO_REGION=us-east-1
 MINIO_SECURE=false
 
 DBSVC_PORT=3401
-DBSVC_ADMIN_TOKEN=change_me  # если пусто — токен не требуется
+DBSVC_ADMIN_TOKEN=change_me  # если пусто — токен не требуется, токен хранится в localStorage браузера!
 ```
 
 ## 2) docker-compose фрагмент
@@ -44,7 +44,29 @@ DBSVC_ADMIN_TOKEN=change_me  # если пусто — токен не треб�
 ## 3) Запуск
 
 ```bash
-docker compose up -d --build dbservice
+docker compose up -d --build dbservice # ???
+```
+```bash
+Первый раз (поднять зависимости):
+
+docker compose up -d postgres minio
+
+Cобрать db-svc:
+
+docker compose up -d db-svc
+
+Если кэш мешает (например, после правок в app/static/ всё ещё старый файл):
+
+docker compose build --no-cache db-svc
+docker compose up -d db-svc
+
+Посмотреть логи:
+docker compose logs -f db-svc
+
+Остановить:
+docker compose stop db-svc
+docker compose down
+docker compose down -v       # со стиранием данных
 ```
 
 Открыть: http://localhost:3401

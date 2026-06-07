@@ -1,0 +1,478 @@
+/* Вкладка «Импорт» — в стиле страницы «База данных».
+ * Две карточки (.card): CSV-импорт и связанный датасет.
+ * Раскладка: вертикальный стек карточек на всю ширину .app-main (grid 1fr 2fr). */
+
+.import-view {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-7);
+}
+
+.import-view__host {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+/* ===== Общие блоки форм импорта ===== */
+
+.csv-import {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.csv-import__form-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+/* Ряд: левая колонка (поля + действия) + 2×2 (справа) на одном уровне */
+.csv-import__form-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--sp-5) var(--sp-7);
+}
+
+/* Левая колонка: поля сверху, кнопка «Импортировать» снизу (в пустом месте) */
+.csv-import__form-left {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  flex: 1 1 auto;
+}
+
+/* Группа 1: схема / таблица / режим — один ряд, компактные поля слева */
+.csv-import__form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-5);
+  align-items: end;
+}
+
+.csv-import__form > .field {
+  flex: 0 0 260px;
+  max-width: 260px;
+}
+
+/* Режим (радио) — по содержимому, не растягиваем */
+.csv-import__form > .field:last-child {
+  flex: 0 0 auto;
+  max-width: none;
+}
+
+/* Группа 2: разделитель / кодировка / файл — сетка 2×2 (правая часть ряда) */
+.csv-import__form-files {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(200px, 1fr));
+  gap: var(--sp-4);
+  align-items: start;
+  flex: 0 1 520px;
+}
+
+.csv-import__file-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.csv-import__file-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.csv-import__file-remove {
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-4);
+  font-size: var(--fs-sm);
+}
+
+/* Режим append/replace — радио в ряд */
+.csv-import__mode {
+  display: inline-flex;
+  gap: var(--sp-5);
+  align-items: center;
+}
+
+.csv-import__mode label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+/* Жёлтое предупреждение (replace = TRUNCATE) */
+.csv-import__warning,
+.dataset-import__warning {
+  padding: var(--sp-3) var(--sp-4);
+  background: rgba(255, 204, 0, 0.08);
+  border: 1px solid var(--accent-yellow);
+  border-radius: var(--r-md);
+  color: var(--accent-yellow);
+  font-size: var(--fs-sm);
+}
+
+.csv-import__file-info {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+/* ----- Превью CSV ----- */
+.csv-import__preview-error {
+  padding: var(--sp-3) var(--sp-4);
+  background: rgba(255, 59, 48, 0.08);
+  border: 1px solid var(--accent-red);
+  border-radius: var(--r-md);
+  color: var(--accent-red);
+  font-size: var(--fs-sm);
+}
+
+.csv-import__preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.csv-import__preview-head {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.csv-import__preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  background: var(--bg-inner);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  display: block;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.csv-import__preview-table th,
+.csv-import__preview-table td {
+  padding: var(--sp-2) var(--sp-4);
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.csv-import__preview-table thead th {
+  font-weight: var(--fw-medium);
+  background: var(--bg-inner);
+  color: var(--text-muted);
+}
+
+.csv-import__preview-more {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+/* ----- Сверка колонок ----- */
+.csv-import__comparison {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  background: var(--bg-inner);
+  border-radius: var(--r-md);
+}
+
+.csv-import__comparison-summary {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.csv-import__cmp-missing-title,
+.csv-import__cmp-extra-title {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  margin-bottom: var(--sp-2);
+}
+
+.csv-import__cmp-missing-items,
+.csv-import__cmp-extra-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
+}
+
+.csv-import__cmp-missing-badge,
+.csv-import__cmp-extra-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--sp-3);
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+}
+
+.csv-import__cmp-missing-badge { background: rgba(255, 204, 0, 0.12); color: var(--accent-yellow); }
+.csv-import__cmp-extra-badge   { background: rgba(255, 59, 48, 0.12);  color: var(--accent-red); }
+
+.csv-import__cmp-missing-hint,
+.csv-import__cmp-extra-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.csv-import__cmp-order {
+  font-size: var(--fs-sm);
+  color: var(--accent-yellow);
+}
+
+.csv-import__cmp-ok {
+  font-size: var(--fs-sm);
+  color: var(--accent-green);
+}
+
+/* ----- Действия и результат ----- */
+.csv-import__actions,
+.dataset-import__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+.csv-import__busy-hint,
+.dataset-import__busy-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  flex: 1 1 240px;
+}
+
+.csv-import__result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--bg-inner);
+  border: 1px solid var(--border-subtle);
+}
+
+.csv-import__result--ok   { border-color: var(--accent-green); }
+.csv-import__result--fail { border-color: var(--accent-red); }
+
+.csv-import__result-head {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semi);
+}
+
+.csv-import__result--ok .csv-import__result-head   { color: var(--accent-green); }
+.csv-import__result--fail .csv-import__result-head { color: var(--accent-red); }
+
+.csv-import__result-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--sp-1) var(--sp-4);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.csv-import__result-list dt { color: var(--text-muted); }
+.csv-import__result-list dd { margin: 0; color: var(--text-primary); word-break: break-word; }
+
+.csv-import__result-hint,
+.csv-import__result-note {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+/* ===== Связанный датасет ===== */
+
+.dataset-import {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+/* Импорт одной кнопкой */
+.dataset-import__bulk {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-inner);
+  border-radius: var(--r-md);
+}
+
+.dataset-import__bulk-hint {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.dataset-import__form-head {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  margin-bottom: var(--sp-3);
+}
+
+.dataset-import__field-remove {
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-4);
+  font-size: var(--fs-sm);
+  align-self: flex-start;
+}
+
+.dataset-import__field-mismatch {
+  font-size: var(--fs-xs);
+  color: var(--accent-yellow);
+}
+
+.dataset-import__mismatch-list {
+  margin: var(--sp-2) 0 0;
+  padding-left: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.dataset-import__mismatch-note {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.dataset-import__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--sp-4);
+}
+
+.dataset-import__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-inner);
+  border-radius: var(--r-md);
+}
+
+.dataset-import__field-label {
+  font-size: var(--fs-sm);
+}
+
+.dataset-import__field-name   { font-weight: var(--fw-semi); color: var(--text-primary); }
+.dataset-import__field-target { color: var(--accent-green); font-family: var(--font-mono); font-size: var(--fs-sm); }
+.dataset-import__field-expected { color: var(--text-dim); font-size: var(--fs-sm); }
+
+.dataset-import__field-fileinfo { font-size: var(--fs-xs); color: var(--text-muted); }
+.dataset-import__field-required { font-size: var(--fs-xs); color: var(--accent-yellow); }
+
+.dataset-import__options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.dataset-import__options > label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+/* ----- Отчёты с табами (общий вид для dataset) ----- */
+.dataset-import__report {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--bg-inner);
+  border: 1px solid var(--border-subtle);
+}
+
+.dataset-import__report--ok   { border-color: var(--accent-green); }
+.dataset-import__report--fail { border-color: var(--accent-red); }
+
+.dataset-import__report-head {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semi);
+}
+
+.dataset-import__report--ok .dataset-import__report-head   { color: var(--accent-green); }
+.dataset-import__report--fail .dataset-import__report-head { color: var(--accent-red); }
+
+/* Табы отчёта — пилюли как навигация */
+.dataset-import__tabs {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.dataset-import__tab--active {
+  background: var(--bg-button-light);
+  color: var(--text-inverse);
+}
+
+.dataset-import__tab--active:hover {
+  background: #ededed;
+}
+
+.dataset-import__tab-body {
+  font-size: var(--fs-sm);
+}
+
+.dataset-import__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.dataset-import__list li {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--bg-card);
+  font-size: var(--fs-sm);
+}
+
+.dataset-import__list--errors li   { color: var(--accent-red); }
+.dataset-import__list--warnings li { color: var(--accent-yellow); }
+
+.dataset-import__counts,
+.dataset-import__inserts {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+
+.dataset-import__counts th,
+.dataset-import__counts td,
+.dataset-import__inserts th,
+.dataset-import__inserts td {
+  padding: var(--sp-2) var(--sp-4);
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dataset-import__counts thead th,
+.dataset-import__inserts thead th {
+  color: var(--text-muted);
+  font-weight: var(--fw-medium);
+}
+
+.dataset-import__inserts-total {
+  font-weight: var(--fw-semi);
+  color: var(--accent-green);
+  margin-bottom: var(--sp-3);
+}

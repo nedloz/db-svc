@@ -1,0 +1,348 @@
+/* Таблицы данных. Используются в columns-panel и rows-panel. */
+
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border-radius: var(--r-md);
+  background: var(--bg-inner);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+
+.table th,
+.table td {
+  padding: var(--sp-3) var(--sp-4);
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.table thead th {
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+  background: var(--bg-inner);
+  font-size: var(--fs-sm);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table--compact th,
+.table--compact td {
+  padding: var(--sp-2) var(--sp-3);
+}
+
+/* Variant: «info-таблица» внутри карточки «Текущая таблица» */
+.table--info {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+.table--info th {
+  background: var(--bg-inner);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.table--info td {
+  font-size: var(--fs-sm);
+}
+
+/* Data table — основной компонент для строк. Те же стили что у .table. */
+.data-table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  border-radius: var(--r-md);
+  background: var(--bg-inner);
+}
+
+/* В fit-режиме таблица = 100% ширины, скролл не нужен (и убирает «кривой» сливер). */
+.data-table-wrapper--fit {
+  overflow-x: hidden;
+}
+
+.data-table {
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  width: auto;
+}
+
+/* Обёртка содержимого ячейки. Базово — одна строка с обрезкой «…». */
+.data-table__cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+
+/* ── Режим 1 «fit» (дефолт): вся таблица помещается, нет горизонтального скролла.
+ * table-layout:fixed + width:100% → равные узкие колонки, значения режутся «…»
+ * (UUID до 4-5 символов — так и задумано). */
+.data-table--fit { width: 100%; table-layout: fixed; }
+.data-table--fit .data-table__cell { max-width: none; }
+
+/* В fit-режиме минимальные отступы (и по горизонтали, и по вертикали) —
+ * максимум места под контент. */
+.data-table--fit th,
+.data-table--fit td {
+  padding: 3px;
+}
+.data-table--fit thead th {
+  padding: 2px 3px;
+}
+
+
+/* ── Режим 2 «ellipsis»: одна строка с «…», ширина по содержимому
+ * (колонки шире, появляется горизонтальный скролл). */
+.data-table--ellipsis { width: auto; }
+.data-table--ellipsis .data-table__cell { max-width: 240px; }
+
+/* ── Режим 3 «wrap»: перенос текста, полная ширина, перенос по словам/дефисам
+ * (как было до изменений — без посимвольного break-word). */
+.data-table--wrap { width: 100%; }
+.data-table--wrap .data-table__cell {
+  max-width: none;
+  white-space: normal;
+}
+
+.data-table th,
+.data-table td {
+  padding: var(--sp-3) var(--sp-4);
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);   /* вертикальные разделители */
+  color: var(--text-primary);
+  vertical-align: top;
+}
+
+.data-table th:last-child,
+.data-table td:last-child { border-right: 0; }
+
+/* Тёмная шапка, белый центрированный текст (по дизайну). */
+.data-table thead th {
+  font-weight: var(--fw-semi);
+  background: var(--bg-button-light);
+  color: var(--text-inverse);
+  text-align: center;
+  cursor: default;
+  user-select: none;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  border-right-color: var(--border-subtle);
+  /* Ниже общего значения — шапка не должна быть высокой. */
+  padding-top: var(--sp-1);
+  padding-bottom: var(--sp-1);
+}
+
+.data-table thead th:last-child { border-right: 0; }
+.data-table thead th:first-child { border-top-left-radius: var(--r-md); }
+.data-table thead th:last-child  { border-top-right-radius: var(--r-md); }
+
+/* Внутренний flex-контейнер шапки (label + треугольник).
+ * display:flex держим ЗДЕСЬ, а не на <th>, иначе th перестаёт быть table-cell
+ * и шапка «разворачивается» в вертикальный столбец. По умолчанию — по центру. */
+.data-table__th-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+}
+
+/* Имя колонки переносится по точкам после «_» (zero-width space из JS). */
+.data-table__th-label {
+  white-space: normal;
+  line-height: 1.15;
+}
+
+/* В режиме инструментов колонок (⇅): треугольник справа, текст слева, клик — sort-modal */
+.data-table__th--tool {
+  cursor: pointer;
+}
+
+.data-table__th--tool:hover {
+  background: #ededed;
+}
+
+/* Резерв места справа под абсолютный треугольник — текст сдвигается немного,
+ * не налезает. Высокая специфичность, чтобы перебить padding fit/обычной шапки. */
+.data-table thead th.data-table__th--tool {
+  padding-right: 18px;
+}
+
+.data-table tbody tr {
+  transition: background var(--t-fast);
+}
+
+.data-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.data-table tbody tr:last-child td { border-bottom: 0; }
+
+.data-table__th--select,
+.data-table__td--select {
+  width: 36px;
+  padding-right: var(--sp-2);
+  padding-left: var(--sp-3);
+}
+
+.data-table__tr--selected {
+  background: rgba(52, 199, 89, 0.08);
+}
+
+.data-table__tr--selected:hover {
+  background: rgba(52, 199, 89, 0.12);
+}
+
+/* Активная строка (одиночный клик) */
+.data-table__tr--active {
+  background: rgba(255, 255, 255, 0.08);
+  outline: 1px solid var(--border-strong);
+  outline-offset: -1px;
+}
+
+.data-table__tr--active:hover {
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.data-table__tr--clickable {
+  cursor: pointer;
+}
+
+/* Треугольник абсолютный (по центру справа), а под него резервируем место
+ * через padding-right самой ячейки — текст сдвигается немного, без наложения. */
+.data-table__th--tool .data-table__sort-indicator {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  color: rgba(0, 0, 0, 0.55);
+  font-size: var(--fs-md);
+  line-height: 1;
+  pointer-events: none;
+}
+
+.data-table__th--sorted .data-table__sort-indicator {
+  color: var(--accent-green);
+  font-weight: var(--fw-bold);
+}
+
+.data-table__th--actions {
+  width: 120px;
+}
+
+/* ====== Row inline-edit (подсветка #94B2F0) ====== */
+.data-table__tr--editing {
+  background: rgba(148, 178, 240, 0.06);
+  outline: 1px solid var(--accent-edit);
+  outline-offset: -1px;
+}
+
+.data-table__td--edit {
+  padding: var(--sp-2) var(--sp-3) !important;
+  vertical-align: middle;
+}
+
+/* Read-only ячейка в edit-режиме — серая рамка, приглушённый текст. */
+.data-table__td--edit-readonly {
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.02);
+  outline: 1px solid #5D5E5E;
+  outline-offset: -1px;
+}
+
+.data-table__edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.data-table__edit-input {
+  width: 100%;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--accent-edit);
+  border-radius: var(--r-sm);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-sm);
+  font-family: var(--font-base);
+  outline: none;
+  transition: border-color var(--t-fast);
+}
+
+.data-table__edit-input:focus {
+  border-color: var(--accent-edit);
+}
+
+.data-table__edit-input--textarea {
+  resize: vertical;
+  min-height: 26px;
+}
+
+.data-table__edit-select {
+  width: 100%;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--accent-edit);
+  border-radius: var(--r-sm);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-sm);
+  appearance: none;
+  /* Треугольник ▼ как фоновое изображение */
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><polygon points='0,0 10,0 5,6' fill='%23c7c7cc'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 22px;
+  cursor: pointer;
+}
+
+/* Заглушка P-011 (enum без значений) — недоступна. */
+.data-table__edit-select:disabled {
+  border-color: var(--border-strong);
+  cursor: not-allowed;
+  opacity: 0.85;
+}
+
+.data-table__edit-checkbox {
+  width: 18px;
+  height: 18px;
+}
+
+.data-table__edit-error {
+  color: var(--accent-red);
+  font-size: var(--fs-xs);
+}
+
+.data-table__td--row-actions {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  justify-content: flex-end;
+  padding: var(--sp-2) var(--sp-3) !important;
+  vertical-align: middle;
+}
+
+.data-table__row-action {
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-4);
+  font-size: var(--fs-sm);
+}
+
+/* ====== FK-cell ====== */
+.data-table__cell-fk {
+  font-size: var(--fs-sm);
+}

@@ -80,6 +80,82 @@ export function compareColumns(csvHeaders, tableColumns) {
   return { missingInCsv, extraInCsv, orderMismatch, intersection };
 }
 
+// Преварительная проверка типов: пробегает первые N строк превью, для каждого
+// (имя колонки → значение) смотрит тип целевой колонки в таблице и пытается
+// сконвертировать. Возвращает массив проблем: {column, type, samples: [...], expected: '...'}
+//
+// Идея — отловить очевидные несовпадения до отправки на бэк, чтобы пользователь
+// не ловил `22P02 invalid input syntax for type uuid` 78 раз подряд.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function validateCsvTypes(csvHeaders, csvRows, tableColumns, { sampleRows = 5 } = {}) {
+  const colByName = new Map(tableColumns.map((c) => [c.name, c]));
+  const problems = [];
+
+  for (let h = 0; h < csvHeaders.length; h++) {
+    const header = csvHeaders[h];
+    const col = colByName.get(header);
+    if (!col) continue;                       // лишняя колонка — это другая проверка
+    const type = String(col.type || '').toLowerCase();
+    const samples = [];
+    let badCount = 0;
+
+    for (let r = 0; r < Math.min(csvRows.length, sampleRows); r++) {
+      const raw = csvRows[r]?.[h];
+      if (raw == null || raw === '') continue; // пустое значение — пусть бэк решает (NOT NULL он сам поймает)
+      if (!isValueCompatible(raw, type)) {
+        badCount++;
+        if (samples.length < 3) samples.push(raw);
+      }
+    }
+
+    if (badCount > 0) {
+      problems.push({
+        column: header,
+        type: col.type,
+        samples,
+        hint: hintFor(type),
+      });
+    }
+  }
+  return problems;
+}
+
+function isValueCompatible(raw, type) {
+  if (type === 'uuid') return UUID_RE.test(String(raw).trim());
+  if (type.includes('int') || type === 'numeric' || type === 'decimal' || type.includes('serial')
+      || type === 'real' || type === 'double precision' || type === 'money') {
+    return Number.isFinite(Number(raw));
+  }
+  if (type === 'boolean') {
+    const s = String(raw).trim().toLowerCase();
+    return ['true','false','t','f','0','1','yes','no','y','n'].includes(s);
+  }
+  if (type.startsWith('timestamp') || type === 'date' || type.startsWith('time')) {
+    const d = new Date(raw);
+    return !Number.isNaN(d.getTime());
+  }
+  if (type === 'json' || type === 'jsonb') {
+    try { JSON.parse(raw); return true; } catch { return false; }
+  }
+  // Для text / varchar / character / citext / user-defined (enum) и т.п. — не валидируем.
+  return true;
+}
+
+function hintFor(type) {
+  if (type === 'uuid')
+    return 'Колонка ожидает UUID (например, "3ea3899a-783d-48c8-8ff2-eb..."). ' +
+           'Если в CSV целые auto-id из Excel — удали колонку (Postgres сгенерирует UUID сам через DEFAULT) ' +
+           'или используй «Связанный импорт» — он сам делает UUID-ремаппинг.';
+  if (type === 'boolean')
+    return 'Колонка ожидает boolean (true/false/t/f/0/1/yes/no).';
+  if (type === 'json' || type === 'jsonb')
+    return 'Колонка ожидает валидный JSON.';
+  if (type.startsWith('timestamp') || type === 'date' || type.startsWith('time'))
+    return 'Колонка ожидает дату/время в ISO-формате (например, "2025-05-23T17:25:00Z").';
+  return `Колонка ожидает ${type}.`;
+}
+
 // Синтез CSV из JS-массивов: header по columns, далее строки.
 // Используется M10 (export) и для возможных fallback'ов.
 // Экранирование: если ячейка содержит delimiter / quote / \n / \r — оборачиваем

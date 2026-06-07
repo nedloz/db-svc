@@ -1,0 +1,51 @@
+/* Status badge: «API Online», «DB подключен», «Last sync: Just now». */
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  height: var(--h-control-sm);
+  background: var(--bg-card);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.status-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.status-badge--ok {
+  border-color: var(--accent-green);
+}
+.status-badge--ok::before {
+  background: var(--accent-green);
+}
+
+.status-badge--error {
+  border-color: var(--accent-red);
+}
+.status-badge--error::before {
+  background: var(--accent-red);
+}
+
+.status-badge--warn {
+  border-color: var(--accent-yellow);
+}
+.status-badge--warn::before {
+  background: var(--accent-yellow);
+}
+
+/* Без точки слева (для Last sync) */
+.status-badge--plain::before {
+  display: none;
+}

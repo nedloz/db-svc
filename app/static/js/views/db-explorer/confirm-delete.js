@@ -3,6 +3,7 @@
 // вместо «зависимости неизвестны» будет полноценный список затрагиваемых записей.
 import { openModal } from '../../components/modal.js';
 import { toast } from '../../components/toast.js';
+import { USE_MOCK_CRUD } from '../../mocks/index.js';
 
 export function openConfirmDelete({ pkValue, bulk = false, onConfirm }) {
   const body = document.createElement('div');
@@ -14,11 +15,12 @@ export function openConfirmDelete({ pkValue, bulk = false, onConfirm }) {
     : `Удалить строку с pk=${formatPk(pkValue)}?`;
   body.append(text);
 
-  const warn = document.createElement('p');
-  warn.className = 'confirm-delete__warning';
-  warn.textContent = 'Mock CRUD (P-001): операция применится только в памяти браузера. ' +
-    'Каскадная проверка зависимостей появится в M6 (P-004).';
-  body.append(warn);
+  if (USE_MOCK_CRUD) {
+    const warn = document.createElement('p');
+    warn.className = 'confirm-delete__warning';
+    warn.textContent = 'Mock CRUD (P-001): операция применится только в памяти браузера.';
+    body.append(warn);
+  }
 
   let busy = false;
   return openModal({

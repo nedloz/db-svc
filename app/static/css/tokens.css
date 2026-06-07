@@ -1,0 +1,64 @@
+/* Design tokens. Все цвета / отступы / типографика — отсюда. */
+
+:root {
+  /* Палитра */
+  --bg-page:        #030008;
+  --bg-card:        #1D1D1E;
+  --bg-inner:       #111014;
+  --bg-button-dark: #030008;
+  --bg-button-light: #FFFFFF;
+
+  --text-primary:   #FFFFFF;
+  --text-inverse:   #000000;
+  --text-muted:     #C7C7CC;
+  --text-dim:       #8E8E93;
+
+  --accent-green:   #34C759;
+  --accent-red:     #FF3B30;
+  --accent-yellow:  #FFCC00;
+  --accent-edit:    #94B2F0;   /* подсветка редактируемых полей */
+
+  --border-subtle:  rgba(255, 255, 255, 0.08);
+  --border-strong:  rgba(255, 255, 255, 0.18);
+
+  /* Радиусы */
+  --r-sm:  6px;
+  --r-md:  10px;
+  --r-lg:  15px;
+  --r-pill: 20px;
+  --r-full: 9999px;
+
+  /* Отступы */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 25px;
+  --sp-7: 30px;
+  --sp-8: 40px;
+
+  /* Типографика */
+  --font-base: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, monospace;
+
+  --fs-xs:   10px;
+  --fs-sm:   12px;
+  --fs-md:   14px;
+  --fs-lg:   16px;
+  --fs-xl:   20px;
+
+  --fw-regular: 400;
+  --fw-medium:  500;
+  --fw-semi:    600;
+  --fw-bold:    700;
+  --fw-black:   800;
+
+  /* Анимации */
+  --t-fast: 120ms ease;
+  --t-med:  200ms ease;
+
+  /* Высоты контролов */
+  --h-control: 35px;
+  --h-control-sm: 30px;
+}

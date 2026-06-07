@@ -1,22 +1,25 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
+
+import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.routes.db import router as db_router
-from app.routes.minio import router as minio_router
 from app.core.auth import require_auth
-
-import logging
-from contextlib import asynccontextmanager
+from app.routes.db import router as db_router
+from app.routes.jobs import router as jobs_router
+from app.routes.minio import router as minio_router
+from app.services.jobs import ensure_jobs_table
 from app.services.pg import check_db_connection
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 APP_NAME = os.getenv("APP_NAME", "dbservice")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -29,25 +32,27 @@ async def lifespan(app: FastAPI):
             db_status.get("host"),
             db_status.get("port"),
         )
+        try:
+            ensure_jobs_table()
+        except Exception as exc:
+            logger.warning("Could not ensure jobs table yet: %s", exc)
     else:
         logger.error("PostgreSQL connection failed: %s", db_status.get("error"))
     yield
 
+
 app = FastAPI(title=APP_NAME, lifespan=lifespan)
 
-# ---- Auth middleware (very lightweight) ----
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    # Allow static and health without auth
     path = request.url.path
     if path.startswith("/static") or path in ("/health",):
         return await call_next(request)
 
-    # Allow initial HTML to load (we still protect API)
     if path in ("/", "/index.html"):
         return await call_next(request)
 
-    # Protect API routes
     if path.startswith("/api/"):
         require_auth(request)
 
@@ -61,14 +66,12 @@ async def health():
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    # Serve the bundled UI (plain HTML/JS)
     with open(os.path.join(os.path.dirname(__file__), "static", "index.html"), "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
 
 
-# Static assets
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
-# Routers
 app.include_router(db_router, prefix="/api/db", tags=["db"])
 app.include_router(minio_router, prefix="/api/minio", tags=["minio"])
+app.include_router(jobs_router, prefix="/api/jobs", tags=["jobs"])

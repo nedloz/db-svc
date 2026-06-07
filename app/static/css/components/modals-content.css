@@ -1,0 +1,293 @@
+/* Содержимое специфичных модалок: row-details, row-form, cascade-modal, fk-picker. */
+
+/* ----- row-details (модал по двойному клику) ----- */
+.row-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.row-details__fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.row-details__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-inner);
+  border-radius: var(--r-md);
+}
+
+/* gap между именем и типом — иначе «id» + «uuid» склеивались в «iduuid». */
+.row-details__field-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.row-details__field-name {
+  font-weight: var(--fw-semi);
+  color: var(--text-primary);
+}
+
+.row-details__field-meta {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.row-details__field-value {
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.row-details__field-value pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.row-details__copy-field {
+  align-self: flex-start;
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-4);
+  font-size: var(--fs-sm);
+}
+
+.row-details__copy-all {
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-5);
+  font-size: var(--fs-sm);
+}
+
+/* ----- row-form ----- */
+.row-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.row-form__notice {
+  padding: var(--sp-2) var(--sp-3);
+  background: rgba(255, 204, 0, 0.08);
+  border-left: 3px solid var(--accent-yellow);
+  border-radius: var(--r-sm);
+  color: var(--text-primary);
+  font-size: var(--fs-xs);
+}
+
+.row-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.row-form__label {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+/* enum-select в модалке редактирования — голубая рамка как у inline-edit */
+.row-form__field .select {
+  width: 100%;
+  border: 1px solid var(--accent-edit);
+}
+
+.row-form__error {
+  color: var(--accent-red);
+  font-size: var(--fs-xs);
+}
+
+/* ----- cascade-modal ----- */
+.cascade-modal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.cascade-modal__head {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+}
+
+.cascade-modal__status {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+.cascade-modal__total {
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-inner);
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+}
+
+.cascade-modal__warning {
+  padding: var(--sp-3);
+  background: rgba(255, 204, 0, 0.08);
+  border: 1px solid var(--accent-yellow);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-xs);
+  color: var(--text-primary);
+}
+
+.cascade-modal__ack {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.cascade-modal__tables {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.cascade-modal__entry {
+  padding: var(--sp-3);
+  background: var(--bg-inner);
+  border-radius: var(--r-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.cascade-modal__entry-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.cascade-modal__entry-name {
+  font-weight: var(--fw-medium);
+}
+
+.cascade-modal__entry-col {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+.cascade-modal__entry-ondelete {
+  font-size: var(--fs-xs);
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-card);
+  color: var(--text-muted);
+}
+
+.cascade-modal__entry-ondelete--cascade   { color: var(--accent-yellow); }
+.cascade-modal__entry-ondelete--set-null  { color: var(--text-muted); }
+.cascade-modal__entry-ondelete--no-action,
+.cascade-modal__entry-ondelete--restrict  { color: var(--accent-red); }
+
+.cascade-modal__entry-count {
+  font-weight: var(--fw-semi);
+}
+
+.cascade-modal__entry-block {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  background: var(--bg-page);
+  padding: var(--sp-2);
+  border-radius: var(--r-sm);
+}
+
+.cascade-modal__entry-error {
+  font-size: var(--fs-xs);
+  color: var(--accent-red);
+}
+
+/* ----- fk-picker ----- */
+.fk-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.fk-picker__value {
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--bg-inner);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-primary);
+}
+
+.fk-picker__value--null {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.fk-picker__ref {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+.fk-picker__pick,
+.fk-picker__clear {
+  height: 28px;
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-xs);
+}
+
+.fk-picker-modal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.fk-picker-modal__note {
+  padding: var(--sp-2) var(--sp-3);
+  background: rgba(255, 204, 0, 0.08);
+  border-left: 3px solid var(--accent-yellow);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-xs);
+  color: var(--text-primary);
+}
+
+.fk-picker-modal__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.fk-picker-modal__status {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  padding: var(--sp-3);
+  text-align: center;
+}
+
+.fk-picker-modal__row {
+  display: flex;
+  justify-content: flex-start;
+  background: var(--bg-inner);
+  height: auto;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  font-family: var(--font-mono);
+  text-align: left;
+}
+
+.fk-picker-modal__row:hover:not(:disabled) {
+  background: var(--bg-card);
+}

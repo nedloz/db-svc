@@ -1,0 +1,112 @@
+/* Модалка сортировки и фильтра по значениям колонки. */
+
+.sort-modal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  min-width: 260px;
+  max-width: 320px;
+}
+
+.sort-modal__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.sort-modal__section-title {
+  font-size: var(--fs-md);
+  color: var(--text-primary);
+  font-weight: var(--fw-medium);
+}
+
+.sort-modal__sort-buttons {
+  display: flex;
+  gap: var(--sp-3);
+}
+
+.sort-modal__sort-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  height: var(--h-control);
+  background: var(--bg-button-dark);
+  border-radius: var(--r-pill);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  transition: background var(--t-fast);
+}
+
+.sort-modal__sort-btn:hover:not(:disabled) {
+  background: #1a1a20;
+}
+
+.sort-modal__sort-btn--active {
+  background: var(--accent-green);
+  color: var(--text-inverse);
+}
+
+.sort-modal__arrow {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-bold);
+}
+
+.sort-modal__search {
+  width: 100%;
+}
+
+.sort-modal__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-height: 240px;
+  overflow-y: auto;
+  padding: var(--sp-2);
+  background: var(--bg-inner);
+  border-radius: var(--r-md);
+}
+
+.sort-modal__option {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--t-fast);
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+}
+
+.sort-modal__option:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sort-modal__option--all {
+  font-weight: var(--fw-medium);
+  padding-left: var(--sp-3);
+}
+
+.sort-modal__option input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.sort-modal__option-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.sort-modal__empty {
+  padding: var(--sp-3);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  text-align: center;
+}

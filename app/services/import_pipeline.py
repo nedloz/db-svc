@@ -70,6 +70,11 @@ class ImportReport:
         }
 
 
+def _pulse(progress_cb, current: int, total: int, stage: str, message: str | None = None) -> None:
+    if progress_cb is not None:
+        progress_cb(current, total, stage, message)
+
+
 def _nullish(v: Any) -> bool:
     return v is None or (isinstance(v, str) and v.strip() == "")
 
@@ -337,35 +342,60 @@ TRUNCATE_SQL = [
 ]
 
 
-def run_dataset_import(files: dict[str, tuple[str, bytes]], dry_run: bool = False, replace_mode: bool = False) -> dict[str, Any]:
+def run_dataset_import(files: dict[str, tuple[str, bytes]], dry_run: bool = False, replace_mode: bool = False, progress_cb=None, cancel_check=None) -> dict[str, Any]:
     report = ImportReport(dry_run=dry_run)
+    order = ["universities", "campuses", "faculties", "buildings", "programs", "topics", "documents", "document_relations"]
+    total_steps = 4 + len(order) + (1 if replace_mode else 0)
+    step = 0
+
+    def advance(stage: str, message: str | None = None) -> None:
+        nonlocal step
+        step += 1
+        _pulse(progress_cb, step, total_steps, stage, message)
+
+    _pulse(progress_cb, step, total_steps, "reading", "Чтение CSV файлов")
     report.info("Чтение CSV файлов")
+    if cancel_check is not None and cancel_check():
+        raise RuntimeError("Job cancelled")
     raw = _normalize_inputs(files, report)
+    advance("normalized", "CSV файлы прочитаны")
+
+    if cancel_check is not None and cancel_check():
+        raise RuntimeError("Job cancelled")
     maps, rows = _prepare_rows(raw, report)
+    advance("prepared", "Данные подготовлены")
 
     if report.errors:
         return report.as_dict()
 
     if dry_run:
         report.info("Dry-run: вставка в БД не выполнялась")
+        advance("dry_run", "Dry-run завершён")
         return report.as_dict()
 
-    order = ["universities", "campuses", "faculties", "buildings", "programs", "topics", "documents", "document_relations"]
     with get_conn() as conn:
         with conn.cursor() as cur:
             if replace_mode:
                 report.info("TRUNCATE целевых таблиц")
                 for stmt in TRUNCATE_SQL:
+                    if cancel_check is not None and cancel_check():
+                        raise RuntimeError("Job cancelled")
                     cur.execute(stmt)
+                advance("truncate", "Таблицы очищены")
             for name in order:
+                if cancel_check is not None and cancel_check():
+                    raise RuntimeError("Job cancelled")
                 vals = rows[name]
                 if not vals:
+                    advance(f"insert:{name}", f"Пропуск {name}: нет строк")
                     continue
                 cur.executemany(SQL[name], vals)
                 report.inserted[name] = len(vals)
                 report.info(f"Вставлено в {name}: {len(vals)}")
+                advance(f"insert:{name}", f"Вставлено в {name}: {len(vals)}")
         conn.commit()
 
+    report.info("Импорт завершён")
     return report.as_dict()
 
 

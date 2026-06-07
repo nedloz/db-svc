@@ -1,34 +1,65 @@
-// Сайдбар db-explorer: список схем с lazy-load таблиц + дебаунс-фильтр.
-import { createInput } from '../../components/form-controls.js';
+// Сайдбар db-explorer (карточка «Навигация по БД»).
+// Дизайн: заголовок + Обновить, поиск + Найти, потом список схем-кнопок;
+// раскрытая схема показывает таблицы как chip'ы в сетке 2 колонки.
+
 import { createLoader } from '../../components/loader.js';
 import { createErrorView } from '../../components/error-view.js';
 import { createEmptyState } from '../../components/empty-state.js';
 
 const FILTER_DEBOUNCE_MS = 200;
 
-export function mountSidebar({ container, store, api, onSelect }) {
+export function mountSidebar({ container, store, api, onSelect, onRefresh }) {
   let filterText = '';
   let debounceTimer = null;
   const inflight = new Set();
 
-  const wrap = document.createElement('div');
-  wrap.className = 'sidebar';
+  // ----- Шапка карточки -----
+  const header = document.createElement('div');
+  header.className = 'card__header';
 
-  const filter = createInput({
-    placeholder: 'Поиск схемы или таблицы…',
-    onInput: (val) => {
-      filterText = val.trim().toLowerCase();
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(render, FILTER_DEBOUNCE_MS);
-    },
+  const title = document.createElement('h2');
+  title.className = 'card__title';
+  title.textContent = 'Навигация по БД';
+
+  const refreshBtn = document.createElement('button');
+  refreshBtn.type = 'button';
+  refreshBtn.className = 'btn';
+  refreshBtn.textContent = 'Обновить';
+  refreshBtn.addEventListener('click', () => { onRefresh?.(); });
+
+  header.append(title, refreshBtn);
+
+  const subtitle = document.createElement('div');
+  subtitle.className = 'card__subtitle';
+  subtitle.textContent = 'Выбери схему и таблицу';
+
+  // ----- Поиск -----
+  const searchRow = document.createElement('div');
+  searchRow.className = 'db-sidebar__search';
+
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.className = 'input';
+  searchInput.placeholder = 'Поиск по схемам';
+  searchInput.addEventListener('input', (e) => {
+    filterText = e.target.value.trim().toLowerCase();
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(render, FILTER_DEBOUNCE_MS);
   });
-  filter.classList.add('sidebar__filter');
 
+  const searchBtn = document.createElement('button');
+  searchBtn.type = 'button';
+  searchBtn.className = 'btn btn--primary';
+  searchBtn.textContent = 'Найти';
+  searchBtn.addEventListener('click', () => render());
+
+  searchRow.append(searchInput, searchBtn);
+
+  // ----- Список схем -----
   const list = document.createElement('div');
-  list.className = 'sidebar__list';
+  list.className = 'db-sidebar__list';
 
-  wrap.append(filter, list);
-  container.replaceChildren(wrap);
+  container.replaceChildren(header, subtitle, searchRow, list);
 
   const unsubscribe = store.subscribe(render);
   render();
@@ -38,7 +69,10 @@ export function mountSidebar({ container, store, api, onSelect }) {
     list.replaceChildren();
 
     if (loading.schemas) {
-      list.append(createLoader({ label: 'Загружаю схемы…' }));
+      const hint = document.createElement('div');
+      hint.className = 'db-sidebar__hint';
+      hint.textContent = 'Загружаю схемы…';
+      list.append(hint);
       return;
     }
     if (errors.schemas) {
@@ -46,9 +80,13 @@ export function mountSidebar({ container, store, api, onSelect }) {
       return;
     }
     if (!schemas.length) {
-      list.append(createEmptyState({ title: 'Нет схем' }));
+      const hint = document.createElement('div');
+      hint.className = 'db-sidebar__hint';
+      hint.textContent = 'БД не подключена. Структура станет доступна после подключения к базе.';
+      list.append(hint);
       return;
     }
+
     const filtered = filterSchemas(store.get(), filterText);
     if (!filtered.length) {
       list.append(createEmptyState({ title: 'Ничего не найдено' }));
@@ -58,55 +96,63 @@ export function mountSidebar({ container, store, api, onSelect }) {
   }
 
   function renderSchema(schema) {
-    const { expandedSchemas, tables, selection, loading } = store.get();
+    const { expandedSchemas, tables, selection, loading, errors } = store.get();
     const isExpanded = expandedSchemas.has(schema);
 
     const node = document.createElement('div');
-    node.className = 'sidebar__schema';
+    node.className = 'db-schema';
 
     const head = document.createElement('button');
     head.type = 'button';
-    head.className = 'sidebar__schema-head';
-    head.textContent = `${isExpanded ? '▾' : '▸'} ${schema}`;
+    head.className = 'db-schema__head';
+    if (isExpanded) head.classList.add('db-schema__head--expanded');
+    head.textContent = capitalize(schema);
     head.addEventListener('click', () => toggleSchema(schema));
     node.append(head);
 
     if (!isExpanded) return node;
 
-    const tableList = document.createElement('div');
-    tableList.className = 'sidebar__tables';
     const ts = tables[schema];
 
-    const { errors } = store.get();
     if (loading.tables === schema || inflight.has(schema)) {
-      tableList.append(createLoader({ inline: true, label: '' }));
-    } else if (errors.tables && errors.tables.schema === schema) {
-      tableList.append(createErrorView(errors.tables.error));
-    } else if (Array.isArray(ts)) {
-      const visible = filterText
-        ? ts.filter((t) => t.toLowerCase().includes(filterText) || schema.toLowerCase().includes(filterText))
-        : ts;
-      if (!visible.length) {
-        const empty = document.createElement('div');
-        empty.className = 'sidebar__empty';
-        empty.textContent = '— нет таблиц —';
-        tableList.append(empty);
-      } else {
-        for (const t of visible) tableList.append(renderTable(schema, t, selection));
-      }
+      const loader = createLoader({ inline: true, label: 'Загружаю…' });
+      node.append(loader);
+      return node;
     }
-    node.append(tableList);
+    if (errors.tables && errors.tables.schema === schema) {
+      node.append(createErrorView(errors.tables.error));
+      return node;
+    }
+    if (!Array.isArray(ts)) return node;
+
+    const visible = filterText
+      ? ts.filter((t) => t.toLowerCase().includes(filterText) || schema.toLowerCase().includes(filterText))
+      : ts;
+
+    if (!visible.length) {
+      const empty = document.createElement('div');
+      empty.className = 'db-sidebar__hint';
+      empty.textContent = '— нет таблиц —';
+      node.append(empty);
+      return node;
+    }
+
+    const tablesGrid = document.createElement('div');
+    tablesGrid.className = 'db-schema__tables';
+    for (const t of visible) tablesGrid.append(renderTableChip(schema, t, selection));
+    node.append(tablesGrid);
     return node;
   }
 
-  function renderTable(schema, table, selection) {
+  function renderTableChip(schema, table, selection) {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'sidebar__table';
+    btn.className = 'db-table-chip';
     if (selection && selection.schema === schema && selection.table === table) {
-      btn.classList.add('sidebar__table--active');
+      btn.classList.add('db-table-chip--active');
     }
     btn.textContent = table;
+    btn.title = `${schema}.${table}`;
     btn.addEventListener('click', () => onSelect(schema, table));
     return btn;
   }
@@ -159,4 +205,9 @@ function filterSchemas({ schemas, tables }, filterText) {
     const ts = tables[s];
     return Array.isArray(ts) && ts.some((t) => t.toLowerCase().includes(filterText));
   });
+}
+
+function capitalize(s) {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }

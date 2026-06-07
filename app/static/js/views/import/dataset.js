@@ -11,6 +11,7 @@
 
 import { createStore } from '../../state/store.js';
 import { createErrorView } from '../../components/error-view.js';
+import { createFilePicker } from '../../components/form-controls.js';
 import { toast } from '../../components/toast.js';
 import { importDataset } from '../../api/db.js';
 import { DATASET_FIELDS } from './dataset-mapping.js';
@@ -41,8 +42,11 @@ export function mountDatasetImport(container) {
   function render() {
     const s = store.get();
     root.replaceChildren();
+    root.append(buildBulkPicker(s));
     root.append(buildForm(s));
     root.append(buildOptions(s));
+    const mismatch = buildMismatchWarning(s);
+    if (mismatch) root.append(mismatch);
     root.append(buildActions(s));
     if (s.error) root.append(createErrorView(s.error));
     if (s.report) root.append(buildReport(s));
@@ -56,6 +60,48 @@ export function mountDatasetImport(container) {
     store.set({ files: next, lastDryRun: null, error: null });
   }
   function setReplace(v) { store.set({ replaceMode: !!v, lastDryRun: null }); }
+
+  // Авто-распределение пачки файлов по полям на основе имени файла.
+  function assignBulk(fileList) {
+    if (!fileList || !fileList.length) return;
+    const next = { ...store.get().files };
+    const used = new Set();
+    // Длинные ключи первыми (document_relations раньше documents), чтобы не перехватить.
+    const fieldsByLen = [...DATASET_FIELDS].sort((a, b) => fieldKeyword(b).length - fieldKeyword(a).length);
+    for (const file of fileList) {
+      const norm = normalizeName(file.name);
+      const match = fieldsByLen.find((f) => !used.has(f.field) && norm.includes(fieldKeyword(f)));
+      if (match) { next[match.field] = file; used.add(match.field); }
+    }
+    store.set({ files: next, lastDryRun: null, error: null });
+    const assigned = used.size;
+    const skipped = fileList.length - assigned;
+    if (assigned) toast.success(`Распределено: ${assigned}${skipped ? `, не распознано: ${skipped}` : ''}`);
+    else toast.warn('Не удалось сопоставить файлы по имени — выберите вручную');
+  }
+
+  function buildMismatchWarning(s) {
+    const bad = DATASET_FIELDS.filter((f) => s.files[f.field] && isLikelyMismatch(f, s.files[f.field]));
+    if (!bad.length) return null;
+    const wrap = document.createElement('div');
+    wrap.className = 'dataset-import__warning';
+    const head = document.createElement('div');
+    head.textContent = `⚠ Похоже, ${bad.length} файл(ов) добавлены не в своё поле:`;
+    wrap.append(head);
+    const ul = document.createElement('ul');
+    ul.className = 'dataset-import__mismatch-list';
+    for (const f of bad) {
+      const li = document.createElement('li');
+      li.textContent = `${f.field}: «${s.files[f.field].name}» (ожидается ${f.defaultFilename})`;
+      ul.append(li);
+    }
+    wrap.append(ul);
+    const note = document.createElement('div');
+    note.className = 'dataset-import__mismatch-note';
+    note.textContent = 'Это предупреждение, не ошибка — можно импортировать, если файлы верные.';
+    wrap.append(note);
+    return wrap;
+  }
 
   function currentSignature() {
     const { files, replaceMode } = store.get();
@@ -106,6 +152,25 @@ export function mountDatasetImport(container) {
 
   // ----- builders -----
 
+  // Импорт одной кнопкой: выбрать сразу все CSV — авто-распределяем по полям
+  // на основе имени файла. Поля можно поправить вручную ниже.
+  function buildBulkPicker(s) {
+    const wrap = document.createElement('div');
+    wrap.className = 'dataset-import__bulk';
+
+    const picker = createFilePicker({
+      accept: '.csv,text/csv',
+      multiple: true,
+      label: 'Выбрать все файлы сразу',
+      onChange: (fileList) => assignBulk(fileList),
+    });
+    const hint = document.createElement('span');
+    hint.className = 'dataset-import__bulk-hint';
+    hint.textContent = 'Распределим по полям автоматически по имени файла. Поля ниже можно поправить вручную.';
+    wrap.append(picker, hint);
+    return wrap;
+  }
+
   function buildForm(s) {
     const wrap = document.createElement('div');
     wrap.className = 'dataset-import__form';
@@ -139,18 +204,34 @@ export function mountDatasetImport(container) {
     label.append(fieldName, target, expected);
     row.append(label);
 
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.csv,text/csv';
-    input.className = 'dataset-import__field-input';
-    input.addEventListener('change', (e) => setFile(spec.field, e.target.files[0] || null));
-    row.append(input);
+    const picker = createFilePicker({
+      accept: '.csv,text/csv',
+      label: file ? 'Заменить' : 'Выберите файл',
+      onChange: (f) => setFile(spec.field, f),
+    });
+    row.append(picker);
 
     if (file) {
       const info = document.createElement('span');
       info.className = 'dataset-import__field-fileinfo';
       info.textContent = `${file.name} · ${formatBytes(file.size)}`;
       row.append(info);
+
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'btn btn--danger dataset-import__field-remove';
+      removeBtn.textContent = 'Убрать';
+      removeBtn.addEventListener('click', () => setFile(spec.field, null));
+      row.append(removeBtn);
+
+      // Предупреждение прямо в карточке поля, если файл похоже не тот.
+      if (isLikelyMismatch(spec, file)) {
+        const warn = document.createElement('span');
+        warn.className = 'dataset-import__field-mismatch';
+        warn.textContent = '⚠ возможно не тот файл';
+        warn.title = `Имя файла «${file.name}» не похоже на ${spec.field}`;
+        row.append(warn);
+      }
     } else if (spec.required) {
       const need = document.createElement('span');
       need.className = 'dataset-import__field-required';
@@ -394,4 +475,22 @@ function formatBytes(n) {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} КБ`;
   return `${(n / 1024 / 1024).toFixed(2)} МБ`;
+}
+
+// Имя файла → только латинские буквы в нижнем регистре (для матчинга).
+// "core_ - universities (1).csv" → "coreuniversities"
+function normalizeName(name) {
+  return String(name).toLowerCase().replace(/\.[a-z0-9]+$/, '').replace(/[^a-z]/g, '');
+}
+
+// Ключевое слово поля для матчинга: имя поля без подчёркиваний.
+// "document_relations" → "documentrelations"
+function fieldKeyword(spec) {
+  return spec.field.toLowerCase().replace(/[^a-z]/g, '');
+}
+
+// Файл похоже не для этого поля, если ключевое слово поля не встречается в имени.
+function isLikelyMismatch(spec, file) {
+  if (!file) return false;
+  return !normalizeName(file.name).includes(fieldKeyword(spec));
 }

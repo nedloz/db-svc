@@ -1,0 +1,40 @@
+/* Карточка — основной контейнер блоков. */
+
+.card {
+  background: var(--bg-card);
+  border-radius: var(--r-lg);
+  padding: 35px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-4);
+}
+
+.card__title {
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-black);
+}
+
+.card__subtitle {
+  font-size: var(--fs-md);
+  color: var(--text-primary);
+}
+
+.card__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.card__empty {
+  text-align: center;
+  font-size: var(--fs-xl);
+  color: var(--text-primary);
+  padding: var(--sp-5) 0;
+}

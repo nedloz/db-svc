@@ -12,6 +12,7 @@ import { openModal } from '../../components/modal.js';
 import { createInput } from '../../components/form-controls.js';
 import { listRows } from '../../api/db.js';
 import { detectPkColumn } from '../../utils/pk.js';
+import { USE_MOCK_RELATIONS, USE_MOCK_FILTERS } from '../../mocks/index.js';
 
 const PICK_LIMIT = 50;
 const SEARCH_DEBOUNCE_MS = 200;
@@ -67,12 +68,14 @@ export function createFkPicker({ value = null, references, nullable = true, onCh
     const body = document.createElement('div');
     body.className = 'fk-picker-modal';
 
-    const note = document.createElement('div');
-    note.className = 'fk-picker-modal__note';
-    note.textContent = `Mock FK (P-003) + поиск через mock-фильтры (P-002): ` +
-      `выводятся первые ${PICK_LIMIT} строк связанной таблицы. ` +
-      `Точный поиск появится с серверным where.`;
-    body.append(note);
+    if (USE_MOCK_RELATIONS || USE_MOCK_FILTERS) {
+      const note = document.createElement('div');
+      note.className = 'fk-picker-modal__note';
+      note.textContent = `Mock FK (P-003) + поиск через mock-фильтры (P-002): ` +
+        `выводятся первые ${PICK_LIMIT} строк связанной таблицы. ` +
+        `Точный поиск появится с серверным where.`;
+      body.append(note);
+    }
 
     const search = createInput({ placeholder: `Поиск по строкам ${references.schema}.${references.table}…` });
     search.classList.add('fk-picker-modal__search');

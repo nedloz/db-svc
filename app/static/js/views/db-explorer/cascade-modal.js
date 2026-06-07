@@ -7,6 +7,7 @@
 // previewCascade — асинхронный. Пока он грузится, в теле модала «Загружаю…».
 import { openModal } from '../../components/modal.js';
 import { toast } from '../../components/toast.js';
+import { USE_MOCK_CRUD, USE_MOCK_CASCADE } from '../../mocks/index.js';
 
 export function openCascadeModal({ schema, table, pkValue, previewPromise, onConfirm }) {
   const body = document.createElement('div');
@@ -37,12 +38,14 @@ export function openCascadeModal({ schema, table, pkValue, previewPromise, onCon
   ack.hidden = true;
   body.append(ack);
 
-  const warn = document.createElement('p');
-  warn.className = 'cascade-modal__warning';
-  warn.textContent = 'Mock CRUD (P-001) + Mock cascade (P-004): удаление применится ' +
-    'только к памяти браузера; список зависимостей синтезирован из FK-карты ' +
-    'init.sql и in-memory строк — может быть неполным.';
-  body.append(warn);
+  if (USE_MOCK_CRUD || USE_MOCK_CASCADE) {
+    const warn = document.createElement('p');
+    warn.className = 'cascade-modal__warning';
+    warn.textContent = 'Mock CRUD (P-001) + Mock cascade (P-004): удаление применится ' +
+      'только к памяти браузера; список зависимостей синтезирован из FK-карты ' +
+      'init.sql и in-memory строк — может быть неполным.';
+    body.append(warn);
+  }
 
   let busy = false;
   let confirmBtn;

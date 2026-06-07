@@ -7,7 +7,7 @@
 // написан рядом с моком).
 import { createStore } from '../../state/store.js';
 import {
-  getSchemas, getTables, getColumns, listRows,
+  getSchemas, getTables, getColumns, getColumnEnums, listRows,
   createRow, updateRow, updateField, deleteRow,
   getRelations, previewCascade, exportCsv,
 } from '../../api/db.js';
@@ -15,9 +15,9 @@ import { detectPkValue } from '../../utils/pk.js';
 
 import { mountSidebar } from './sidebar.js';
 import { mountTableInfo } from './table-info.js';
-import { mountColumnsPanel } from './columns-panel.js';
 import { mountFiltersPanel } from './filters.js';
 import { mountRowsPanel } from './rows-panel.js';
+import { buildRowsControls } from './rows-controls.js';
 import { openRowDetails } from './row-details.js';
 import { openRowForm } from './row-form.js';
 import { openConfirmDelete } from './confirm-delete.js';
@@ -32,8 +32,13 @@ export const dbExplorerView = {
   },
 };
 
-function mountDbExplorer(container) {
-  const store = createStore({
+// Состояние вкладки живёт на уровне модуля (singleton), чтобы переживать
+// размонтирование при переходе на другую вкладку. Возврат на «База данных»
+// восстанавливает выбранную таблицу, строки, фильтры — как было.
+let dbStore = null;
+
+function initialDbState() {
+  return {
     schemas: [],
     tables: {},                     // schema -> string[] (lazy)
     expandedSchemas: new Set(),
@@ -44,17 +49,101 @@ function mountDbExplorer(container) {
     page: 1,
     pageSize: 50,
     orderBy: null,
+    orderDir: null,                 // 'asc' | 'desc' | null
     filters: [],                    // [{ column, op, value }]
     filterMode: null,               // 'client' | 'server' | null
-    pageRowsBeforeFilter: null,     // сколько было до клиентского фильтра
-    selectedPks: new Set(),         // выбранные строки на текущей странице (M5)
-    outboundRelations: [],          // FK текущей таблицы (M6, P-003)
+    pageRowsBeforeFilter: null,
+    selectedPks: new Set(),         // bulk-select (зарезервировано, чекбоксы убраны из UI)
+    activePk: null,                 // активная строка (одиночный клик)
+    editingPk: null,                // редактируемая строка (✎)
+    columnTools: false,             // режим «инструменты колонок» (треугольники в шапке)
+    cellMode: 'fit',                // 'fit' | 'ellipsis' | 'wrap' — режим отображения ячеек
+    valueFilters: {},               // {colKey: { include: Set<string> }} из sort-modal
+    columnEnums: {},                // {col: [values]} из бэка (P-011)
+    outboundRelations: [],
+    rowSearch: '',
     loading: { schemas: false, tables: null, columns: false, rows: false, relations: false },
     errors:  { schemas: null, tables: null, columns: null, rows: null, relations: null },
-  });
+  };
+}
+
+function mountDbExplorer(container) {
+  const store = dbStore || (dbStore = createStore(initialDbState()));
+  // editingPk не восстанавливаем — оверлей редактирования закрываем при уходе.
+  if (store.get().editingPk != null) store.set({ editingPk: null });
 
   const layout = buildLayout();
   container.replaceChildren(layout.root);
+
+  // Шапка rows-card: «Навигация по БД» + Обновить, потом контролы, потом таблица.
+  const rowsHeader = document.createElement('div');
+  rowsHeader.className = 'card__header';
+  const rowsTitle = document.createElement('h2');
+  rowsTitle.className = 'card__title';
+  rowsTitle.textContent = 'Навигация по БД';
+  const rowsRefresh = document.createElement('button');
+  rowsRefresh.type = 'button';
+  rowsRefresh.className = 'btn';
+  rowsRefresh.textContent = 'Обновить';
+  rowsRefresh.addEventListener('click', () => loadRows());
+  rowsHeader.append(rowsTitle, rowsRefresh);
+
+  const rowsControls = buildRowsControls({
+    onSearch: (value) => {
+      // Клиентский поиск по строкам — сохраняем в локальный store как «rowSearch»,
+      // rows-panel сам отфильтрует видимые строки. (Серверный полный поиск —
+      // через панель фильтров.)
+      store.set({ rowSearch: value.trim().toLowerCase() });
+    },
+    onLoad: loadRows,
+    onClear: () => { clearFilters(); store.set({ rowSearch: '' }); },
+    getLimit: () => store.get().pageSize,
+    getOffset: () => (store.get().page - 1) * store.get().pageSize,
+    onLimitChange: (v) => { store.set({ pageSize: v, page: 1 }); loadRows(); },
+    onOffsetChange: (v) => {
+      const ps = store.get().pageSize;
+      const newPage = Math.max(1, Math.floor(v / ps) + 1);
+      store.set({ page: newPage }); loadRows();
+    },
+    getPagination: () => {
+      const { page, pageSize, rowsTotal } = store.get();
+      const totalPages = rowsTotal !== null ? Math.max(1, Math.ceil(rowsTotal / pageSize)) : null;
+      return { page, totalPages };
+    },
+    onPrev: () => {
+      const { page } = store.get();
+      if (page <= 1) return;
+      onPageChange({ page: page - 1, pageSize: store.get().pageSize });
+    },
+    onNext: () => {
+      const { page, pageSize, rowsTotal } = store.get();
+      if (rowsTotal !== null && page >= Math.ceil(rowsTotal / pageSize)) return;
+      onPageChange({ page: page + 1, pageSize });
+    },
+    onToggleFilters: () => { layout.filtersPanel.classList.toggle('is-hidden'); },
+    onExport: () => handleExport(),
+    onToggleEdit: () => handleToggleEdit(),
+    getEditState: () => ({
+      hasActive: store.get().activePk != null,
+      isEditing: store.get().editingPk != null,
+    }),
+    onToggleColumnTools: () => store.set({ columnTools: !store.get().columnTools }),
+    getColumnToolsState: () => store.get().columnTools,
+    onCycleCellMode: () => {
+      const order = ['fit', 'ellipsis', 'wrap'];
+      const next = order[(order.indexOf(store.get().cellMode) + 1) % order.length];
+      store.set({ cellMode: next });
+    },
+    getCellMode: () => store.get().cellMode,
+  });
+
+  // По умолчанию панель фильтров скрыта — открывается через ⛛-кнопку.
+  layout.filtersPanel.classList.add('is-hidden');
+
+  layout.rowsCard.append(rowsHeader, rowsControls.el, layout.filtersPanel, layout.rowsPanel);
+
+  // Контролы зависят от store (pageSize / page / total) — обновляем при изменениях.
+  const unsubControls = store.subscribe(() => rowsControls.update());
 
   const unmounters = [
     mountSidebar({
@@ -64,14 +153,15 @@ function mountDbExplorer(container) {
         getTables: (schema) => getTables(schema, { trackAs: `Таблицы ${schema}` }),
       },
       onSelect: selectTable,
+      onRefresh: loadSchemas,
     }),
     mountTableInfo({
       container: layout.info,
       store,
       onCreateRow: handleCreate,
       onDeleteSelected: handleDeleteSelected,
+      onRefresh: () => { loadColumns(); loadRows(); },
     }),
-    mountColumnsPanel({ container: layout.columnsPanel, store }),
     mountFiltersPanel({
       container: layout.filtersPanel,
       store,
@@ -82,16 +172,21 @@ function mountDbExplorer(container) {
     mountRowsPanel({
       container: layout.rowsPanel,
       store,
-      onPageChange,
-      onSortChange,
-      onRowClick: openDetailsForRow,
-      onCellEdit: handleCellEdit,
+      onRowClick: openDetailsForRow,                  // dblclick → детали
+      onActiveRowChange: handleActiveRowChange,       // click → активная
+      onRowEditCommit: handleRowEditCommit,
+      onRowEditCancel: () => store.set({ editingPk: null }),
+      onRowDelete: (row) => { store.set({ editingPk: null }); handleDelete(row); },
+      onSortChange: handleSortChange,
+      onValueFilterChange: handleValueFilterChange,
       onSelectionChange: handleSelectionChange,
       onFkClick: navigateToRelated,
     }),
   ];
 
-  loadSchemas();
+  // Грузим схемы только при первом открытии. При возврате на вкладку —
+  // состояние уже в store, повторный fetch не нужен (есть кнопка «Обновить»).
+  if (!store.get().schemas.length) loadSchemas();
 
   function loadSchemas() {
     patchLoading('schemas', true);
@@ -112,6 +207,7 @@ function mountDbExplorer(container) {
       selection: { schema, table },
       page: 1,
       orderBy: null,
+      orderDir: null,
       filters: opts.filters || [],
       filterMode: null,
       pageRowsBeforeFilter: null,
@@ -119,6 +215,10 @@ function mountDbExplorer(container) {
       rows: [],
       rowsTotal: null,
       selectedPks: new Set(),
+      activePk: null,
+      editingPk: null,
+      valueFilters: {},
+      columnEnums: {},
       outboundRelations: [],
     });
     loadColumns();
@@ -172,10 +272,19 @@ function mountDbExplorer(container) {
         patchLoading('columns', false);
         patchError('columns', err);
       });
+
+    // P-011: допустимые значения колонок (для выпадающих списков). Не блокирует.
+    getColumnEnums(sel.schema, sel.table)
+      .then((columnEnums) => {
+        const cur = store.get().selection;
+        if (!cur || cur.schema !== sel.schema || cur.table !== sel.table) return;
+        store.set({ columnEnums: columnEnums || {} });
+      })
+      .catch(() => { /* не критично — fallback на mocks/db-enums.js */ });
   }
 
   function loadRows() {
-    const { selection, page, pageSize, orderBy, filters } = store.get();
+    const { selection, page, pageSize, orderBy, orderDir, filters } = store.get();
     if (!selection) return;
     patchLoading('rows', true);
     patchError('rows', null);
@@ -187,6 +296,7 @@ function mountDbExplorer(container) {
         limit: pageSize,
         offset,
         orderBy,
+        orderDir,
         filters,
       },
       { trackAs: `Строки ${selection.schema}.${selection.table}` },
@@ -216,14 +326,76 @@ function mountDbExplorer(container) {
   }
 
   function onPageChange({ page, pageSize }) {
-    store.set({ page, pageSize, selectedPks: new Set() });
+    store.set({ page, pageSize, selectedPks: new Set(), activePk: null, editingPk: null });
     loadRows();
   }
 
-  function onSortChange({ key }) {
-    const cur = store.get().orderBy;
-    store.set({ orderBy: cur === key ? null : key, page: 1, selectedPks: new Set() });
+  function handleSortChange(key, dir) {
+    store.set({
+      orderBy: dir ? key : null,
+      orderDir: dir || null,
+      page: 1,
+      selectedPks: new Set(),
+      activePk: null,
+      editingPk: null,
+    });
     loadRows();
+  }
+
+  function handleValueFilterChange(colKey, valueFilter) {
+    const cur = store.get().valueFilters || {};
+    const next = { ...cur };
+    if (!valueFilter) delete next[colKey];
+    else next[colKey] = valueFilter;
+    store.set({ valueFilters: next });
+  }
+
+  function handleActiveRowChange(pk) {
+    // Если идёт edit — не позволяем переключать активную строку.
+    if (store.get().editingPk != null) return;
+    store.set({ activePk: pk });
+  }
+
+  function handleToggleEdit() {
+    const { activePk, editingPk } = store.get();
+    if (editingPk != null) {
+      // Уже редактируем — кнопка работает как «отмена».
+      store.set({ editingPk: null });
+      return;
+    }
+    if (activePk == null) {
+      toast.warn('Сначала выберите строку (клик)');
+      return;
+    }
+    store.set({ editingPk: activePk });
+  }
+
+  async function handleRowEditCommit(row, changes) {
+    const { selection, columns } = store.get();
+    if (!selection) return;
+    if (!Object.keys(changes).length) {
+      store.set({ editingPk: null });
+      return;
+    }
+    const pk = detectPkValue(row, columns);
+    if (pk == null) {
+      toast.error('Не удалось определить первичный ключ строки');
+      throw new Error('no pk');
+    }
+    try {
+      // TODO(backend): P-001 — серия PATCH'ей по полям. Сейчас updateField — mock-friendly.
+      for (const [column, value] of Object.entries(changes)) {
+        await updateField(selection.schema, selection.table, pk, column, value, row, columns, {
+          trackAs: `Поле ${column} в ${selection.schema}.${selection.table}`,
+        });
+      }
+      toast.success(`Сохранено полей: ${Object.keys(changes).length}`);
+      store.set({ editingPk: null });
+      loadRows();
+    } catch (err) {
+      toast.error(err?.message || 'Ошибка сохранения');
+      throw err;
+    }
   }
 
   function handleSelectionChange(nextSet) {
@@ -249,7 +421,7 @@ function mountDbExplorer(container) {
   }
 
   function handleCreate() {
-    const { selection, columns, outboundRelations } = store.get();
+    const { selection, columns, outboundRelations, columnEnums } = store.get();
     if (!selection) { toast.warn('Сначала выберите таблицу'); return; }
     if (!columns.length) { toast.warn('Колонки ещё не загружены'); return; }
     // TODO(backend): P-001 — POST /api/db/{schema}/{table}; сейчас mock-in-memory.
@@ -258,18 +430,19 @@ function mountDbExplorer(container) {
       columns,
       selection,
       relations: outboundRelations,
+      enums: columnEnums,
       onSubmit: async (data) => {
         await createRow(selection.schema, selection.table, data, columns, {
           trackAs: `Создание в ${selection.schema}.${selection.table}`,
         });
-        toast.success('Строка создана (mock — только в памяти браузера)');
+        toast.success('Строка создана');
         loadRows();
       },
     });
   }
 
   function handleEdit(row) {
-    const { selection, columns, outboundRelations } = store.get();
+    const { selection, columns, outboundRelations, columnEnums } = store.get();
     if (!selection) return;
     const pk = detectPkValue(row, columns);
     if (pk == null) { toast.error('Не удалось определить первичный ключ строки'); return; }
@@ -280,11 +453,12 @@ function mountDbExplorer(container) {
       row,
       selection,
       relations: outboundRelations,
+      enums: columnEnums,
       onSubmit: async (data) => {
         await updateRow(selection.schema, selection.table, pk, data, columns, {
           trackAs: `Обновление ${selection.schema}.${selection.table}`,
         });
-        toast.success('Строка обновлена (mock)');
+        toast.success('Строка обновлена');
         loadRows();
       },
     });
@@ -308,7 +482,7 @@ function mountDbExplorer(container) {
         await deleteRow(selection.schema, selection.table, pk, columns, {
           trackAs: `Удаление в ${selection.schema}.${selection.table}`,
         });
-        toast.success('Строка удалена (mock)');
+        toast.success('Строка удалена');
         const sel = new Set(store.get().selectedPks);
         sel.delete(pk);
         store.set({ selectedPks: sel });
@@ -331,7 +505,7 @@ function mountDbExplorer(container) {
             trackAs: `Удаление ${selection.schema}.${selection.table} (${pk})`,
           });
         }
-        toast.success(`Удалено: ${pks.length} (mock)`);
+        toast.success(`Удалено: ${pks.length}`);
         store.set({ selectedPks: new Set() });
         loadRows();
       },
@@ -367,20 +541,8 @@ function mountDbExplorer(container) {
     }
   }
 
-  async function handleCellEdit({ row, column, value }) {
-    const { selection, columns } = store.get();
-    if (!selection) return;
-    const pk = detectPkValue(row, columns);
-    if (pk == null) { toast.error('Не удалось определить первичный ключ строки'); throw new Error('no pk'); }
-    // TODO(backend): P-001 — PATCH /api/db/{schema}/{table}/{pk} с одним полем.
-    await updateField(selection.schema, selection.table, pk, column, value, row, columns, {
-      trackAs: `Поле ${column} в ${selection.schema}.${selection.table}`,
-    });
-    toast.success(`Поле ${column} обновлено (mock)`);
-    loadRows();
-  }
-
   return () => {
+    try { unsubControls?.(); } catch (_e) { /* swallow */ }
     for (const off of unmounters) {
       try { off?.(); } catch (_e) { /* swallow */ }
     }
@@ -388,8 +550,8 @@ function mountDbExplorer(container) {
 }
 
 function triggerCsvDownload(csv, schema, table) {
-  // BOM (U+FEFF) — чтобы Excel корректно открывал UTF-8 кириллицу.
-  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+  // BOM добавляет бэк (export_csv_text). Здесь не дублируем.
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -408,28 +570,40 @@ function isoDateStamp() {
 }
 
 function buildLayout() {
+  // Контейнер использует display: contents, реальная сетка — на .app-main.
   const root = document.createElement('div');
   root.className = 'db-explorer';
 
-  const sidebar = document.createElement('aside');
-  sidebar.className = 'db-explorer__sidebar';
+  // Левая карточка — навигация по схемам.
+  const sidebar = document.createElement('section');
+  sidebar.className = 'card db-explorer__sidebar';
 
-  const content = document.createElement('div');
-  content.className = 'db-explorer__content';
+  // Правая карточка — Текущая таблица: info + columns.
+  const info = document.createElement('section');
+  info.className = 'card db-explorer__info';
 
-  const info = document.createElement('div');
-  info.className = 'db-explorer__info';
-
+  // Колонки и фильтры монтируются внутрь info/rows-card соответственно.
   const columnsPanel = document.createElement('div');
-  columnsPanel.className = 'db-explorer__columns';
+  columnsPanel.className = 'db-explorer__columns-slot';
+
+  // Нижняя широкая карточка — строки + фильтры + пагинация.
+  const rowsCard = document.createElement('section');
+  rowsCard.className = 'card db-explorer__rows-card';
 
   const filtersPanel = document.createElement('div');
-  filtersPanel.className = 'db-explorer__filters';
+  filtersPanel.className = 'db-explorer__filters-slot';
 
   const rowsPanel = document.createElement('div');
-  rowsPanel.className = 'db-explorer__rows';
+  rowsPanel.className = 'db-explorer__rows-slot';
 
-  content.append(info, columnsPanel, filtersPanel, rowsPanel);
-  root.append(sidebar, content);
-  return { root, sidebar, content, info, columnsPanel, filtersPanel, rowsPanel };
+  root.append(sidebar, info, rowsCard);
+  return {
+    root,
+    sidebar,
+    info,
+    columnsPanel,   // монтируется внутрь info через mountTableInfo
+    rowsCard,
+    filtersPanel,   // монтируется внутрь rowsCard
+    rowsPanel,      // монтируется внутрь rowsCard
+  };
 }

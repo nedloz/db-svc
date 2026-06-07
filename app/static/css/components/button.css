@@ -1,0 +1,78 @@
+/* Кнопки. По дизайну есть две основные формы: rounded-pill и rounded-rect. */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-5);
+  height: var(--h-control);
+  border-radius: var(--r-pill);
+  background: var(--bg-button-dark);
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  transition: background var(--t-fast), transform var(--t-fast), opacity var(--t-fast);
+}
+
+.btn:hover:not(:disabled) {
+  background: #1a1a20;
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn--primary {
+  background: var(--bg-button-light);
+  color: var(--text-inverse);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: #ededed;
+}
+
+.btn--danger {
+  background: var(--accent-red);
+  color: var(--text-primary);
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: #ff5347;
+}
+
+/* Rect-вариант — без скругления в пилюлю (для табов и пр.) */
+.btn--rect {
+  border-radius: var(--r-md);
+}
+
+/* Маленькая компактная кнопка */
+.btn--sm {
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-4);
+  font-size: var(--fs-sm);
+}
+
+/* Иконочная кнопка */
+.btn--icon {
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  border-radius: var(--r-sm);
+  background: var(--bg-button-light);
+  color: var(--text-inverse);
+}
+
+.btn--icon:hover:not(:disabled) {
+  background: #ededed;
+}
+
+.btn--ghost {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+}
+
+.btn--ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.04);
+}

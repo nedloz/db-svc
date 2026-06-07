@@ -8,6 +8,7 @@
 
 import { createStore } from '../../state/store.js';
 import { createErrorView } from '../../components/error-view.js';
+import { createFilePicker } from '../../components/form-controls.js';
 import { toast } from '../../components/toast.js';
 import { importFilesToMinio, getImportPlan } from '../../api/minio.js';
 
@@ -79,18 +80,17 @@ export function mountMinioImportFiles(container, { onImported } = {}) {
     const wrap = document.createElement('div');
     wrap.className = 'minio-import-files__form';
 
-    const lbl = document.createElement('label');
+    const lbl = document.createElement('div');
     lbl.className = 'minio-import-files__field';
     const cap = document.createElement('span'); cap.textContent = 'Файлы для импорта: ';
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.multiple = true;
-    input.className = 'minio-import-files__input';
-    input.addEventListener('change', (e) => {
-      const files = Array.from(e.target.files || []);
-      store.set({ files, lastDryRun: null, report: null, error: null });
+    const picker = createFilePicker({
+      multiple: true,
+      label: 'Выберите файлы',
+      onChange: (files) => {
+        store.set({ files: files || [], lastDryRun: null, report: null, error: null });
+      },
     });
-    lbl.append(cap, input);
+    lbl.append(cap, picker);
     wrap.append(lbl);
 
     if (s.files.length) {
@@ -98,7 +98,18 @@ export function mountMinioImportFiles(container, { onImported } = {}) {
       ul.className = 'minio-import-files__list';
       for (const f of s.files) {
         const li = document.createElement('li');
-        li.textContent = `${f.name} · ${formatBytes(f.size)}`;
+        li.className = 'minio-import-files__list-item';
+        const name = document.createElement('span');
+        name.textContent = `${f.name} · ${formatBytes(f.size)}`;
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'btn btn--danger minio-import-files__remove';
+        removeBtn.textContent = 'Убрать';
+        removeBtn.addEventListener('click', () => {
+          const next = s.files.filter((x) => x !== f);
+          store.set({ files: next, lastDryRun: null, report: null, error: null });
+        });
+        li.append(name, removeBtn);
         ul.append(li);
       }
       wrap.append(ul);

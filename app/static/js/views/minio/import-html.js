@@ -32,6 +32,7 @@ export function mountMinioImportHtml(container, { onImported } = {}) {
     reportKind: null,
     error: null,
     plan: null,
+    planView: 'list',   // 'list' | 'json'
     activeTab: 'stats',
   });
 
@@ -61,21 +62,76 @@ export function mountMinioImportHtml(container, { onImported } = {}) {
     head.className = 'minio-import-html__plan-head';
     head.textContent = 'Кандидаты — library.documents с content_type=\'html\' и непустым origin_url.';
     wrap.append(head);
-    if (s.plan?.counts) {
-      const counts = document.createElement('div');
-      counts.className = 'minio-import-html__plan-counts';
-      counts.textContent = `Всего: ${s.plan.counts.total} · ожидают: ${s.plan.counts.pending} · уже загружено: ${s.plan.counts.already_loaded}`;
-      wrap.append(counts);
-    } else if (s.plan) {
+
+    if (!s.plan) return wrap;
+
+    const summary = s.plan.summary || {};
+    const counts = document.createElement('div');
+    counts.className = 'minio-import-html__plan-counts';
+    counts.textContent =
+      `Всего: ${summary.total_html_documents ?? '—'} · ` +
+      `ожидают: ${summary.pending ?? '—'} · ` +
+      `уже загружено: ${summary.already_loaded ?? '—'}`;
+    wrap.append(counts);
+
+    // Переключатель «Список / JSON».
+    const toggle = document.createElement('div');
+    toggle.className = 'minio-import-html__plan-toggle';
+    for (const [mode, label] of [['list', 'Список'], ['json', 'JSON']]) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `btn${s.planView === mode ? ' minio-import-html__tab--active' : ''}`;
+      b.textContent = label;
+      b.addEventListener('click', () => store.set({ planView: mode }));
+      toggle.append(b);
+    }
+    wrap.append(toggle);
+
+    if (s.planView === 'json') {
       const pre = document.createElement('pre');
       pre.className = 'minio-import-html__plan-pre';
       try { pre.textContent = JSON.stringify(s.plan, null, 2); } catch { pre.textContent = String(s.plan); }
-      const det = document.createElement('details');
-      const sum = document.createElement('summary'); sum.textContent = 'Показать план';
-      det.append(sum, pre);
-      wrap.append(det);
+      wrap.append(pre);
+    } else {
+      wrap.append(buildPlanList('Ожидают загрузки', s.plan.pending || [], 'pending'));
+      wrap.append(buildPlanList('Уже загружены', s.plan.already_loaded || [], 'loaded'));
     }
     return wrap;
+  }
+
+  function buildPlanList(title, items, kind) {
+    const box = document.createElement('div');
+    box.className = 'minio-import-html__plan-section';
+    const h = document.createElement('div');
+    h.className = 'minio-import-html__plan-section-title';
+    h.textContent = `${title} (${items.length})`;
+    box.append(h);
+
+    if (!items.length) {
+      const empty = document.createElement('div');
+      empty.className = 'minio-import-html__plan-empty';
+      empty.textContent = kind === 'pending' ? 'Нет документов в очереди.' : 'Пока ничего не загружено.';
+      box.append(empty);
+      return box;
+    }
+
+    const ul = document.createElement('ul');
+    ul.className = 'minio-import-html__plan-items';
+    for (const it of items) {
+      const li = document.createElement('li');
+      li.className = `minio-import-html__plan-item minio-import-html__plan-item--${kind}`;
+      const name = document.createElement('div');
+      name.className = 'minio-import-html__plan-item-title';
+      name.textContent = it.title || it.document_id || '<документ>';
+      const url = document.createElement('div');
+      url.className = 'minio-import-html__plan-item-url';
+      url.textContent = it.origin_url || '';
+      url.title = it.origin_url || '';
+      li.append(name, url);
+      ul.append(li);
+    }
+    box.append(ul);
+    return box;
   }
 
   function buildForm(s) {
@@ -102,6 +158,11 @@ export function mountMinioImportHtml(container, { onImported } = {}) {
     const sp = document.createElement('span'); sp.textContent = 'Limit: ';
     limitLbl.append(sp, limitInput);
     wrap.append(limitLbl);
+
+    const hint = document.createElement('div');
+    hint.className = 'minio-import-html__limit-hint';
+    hint.textContent = '⚠ Без лимита обрабатываются ВСЕ документы — даже dry-run может идти долго. Для проверки поставьте 1–2.';
+    wrap.append(hint);
 
     return wrap;
   }

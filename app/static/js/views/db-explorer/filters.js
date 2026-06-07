@@ -25,12 +25,17 @@ export function mountFiltersPanel({ container, store, onApply, onClear, onExport
 
   let lastSelection = undefined;
   let lastFilters = undefined;
+  let lastColumns = undefined;
 
   const unsub = store.subscribe(() => {
     const s = store.get();
-    if (s.selection === lastSelection && s.filters === lastFilters) return;
+    // Колонки грузятся асинхронно ПОСЛЕ выбора таблицы — без слежения за ними
+    // панель остаётся с disabled-кнопками («+ Добавить фильтр») и пустым select'ом
+    // до первого изменения filters (например, по «Очистить»).
+    if (s.selection === lastSelection && s.filters === lastFilters && s.columns === lastColumns) return;
     lastSelection = s.selection;
     lastFilters = s.filters;
+    lastColumns = s.columns;
     render();
   });
   render();

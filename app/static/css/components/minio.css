@@ -1,0 +1,506 @@
+/* Вкладка MinIO — в стиле страницы «База данных».
+ * Четыре карточки (.card): объекты bucket, загрузка, импорт файлов, импорт HTML.
+ * Раскладка: вертикальный стек на всю ширину .app-main (grid 1fr 2fr). */
+
+.minio-view {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-7);
+}
+
+.minio-view__host {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+/* ===== Список объектов ===== */
+.minio-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.minio-list__toolbar {
+  display: flex;
+  gap: var(--sp-4);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.minio-list__prefix,
+.minio-list__search {
+  flex: 1 1 220px;
+  min-width: 180px;
+}
+
+.minio-list__summary {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.minio-list__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  background: var(--bg-inner);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+.minio-list__table th,
+.minio-list__table td {
+  padding: var(--sp-3) var(--sp-4);
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.minio-list__table thead th {
+  font-weight: var(--fw-medium);
+  color: var(--text-muted);
+  background: var(--bg-inner);
+}
+
+.minio-list__table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.minio-list__table tbody tr:last-child td { border-bottom: 0; }
+
+.minio-list__th--select,
+.minio-list__td--select {
+  width: 36px;
+}
+
+.minio-list__tr--selected {
+  background: rgba(52, 199, 89, 0.08);
+}
+
+.minio-list__td--key {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.minio-list__td--actions {
+  display: flex;
+  gap: var(--sp-2);
+  white-space: nowrap;
+}
+
+/* ===== Загрузка ===== */
+.minio-upload {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.minio-upload__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.minio-upload__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.minio-upload__field .input {
+  max-width: 360px;
+}
+
+.minio-upload__busy-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.minio-upload__queue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.minio-upload__queue-head {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.minio-upload__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.minio-upload__item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-inner);
+  border-radius: var(--r-md);
+  border-left: 3px solid var(--border-strong);
+}
+
+.minio-upload__item--done   { border-left-color: var(--accent-green); }
+.minio-upload__item--failed { border-left-color: var(--accent-red); }
+.minio-upload__item--uploading,
+.minio-upload__item--presigning { border-left-color: var(--accent-yellow); }
+
+.minio-upload__item-meta {
+  font-size: var(--fs-sm);
+}
+
+.minio-upload__item-name { font-weight: var(--fw-medium); }
+.minio-upload__item-size { color: var(--text-dim); font-size: var(--fs-xs); font-family: var(--font-mono); }
+
+.minio-upload__item-status--done   { color: var(--accent-green); }
+.minio-upload__item-status--failed { color: var(--accent-red); }
+.minio-upload__item-status--uploading,
+.minio-upload__item-status--presigning { color: var(--accent-yellow); }
+
+/* Прогресс-бар загрузки */
+.minio-upload__bar {
+  position: relative;
+  height: 18px;
+  background: var(--bg-card);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+
+.minio-upload__bar-fill {
+  height: 100%;
+  background: var(--accent-green);
+  transition: width var(--t-med);
+}
+
+.minio-upload__bar-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+}
+
+.minio-upload__item-error {
+  font-size: var(--fs-sm);
+  color: var(--accent-red);
+}
+
+/* ===== Импорт файлов / HTML (общий вид) ===== */
+.minio-import-files,
+.minio-import-html {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.minio-import-files__plan-head,
+.minio-import-html__plan-head {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.minio-import-html__plan-counts {
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+  margin-top: var(--sp-2);
+}
+
+.minio-import-html__plan-toggle {
+  display: flex;
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0;
+}
+
+.minio-import-html__plan-section {
+  margin-top: var(--sp-3);
+}
+
+.minio-import-html__plan-section-title {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text-muted);
+  margin-bottom: var(--sp-2);
+}
+
+.minio-import-html__plan-empty {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.minio-import-html__plan-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.minio-import-html__plan-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-inner);
+  border-radius: var(--r-sm);
+  border-left: 3px solid var(--border-strong);
+}
+
+.minio-import-html__plan-item--loaded { border-left-color: var(--accent-green); }
+.minio-import-html__plan-item--pending { border-left-color: var(--accent-yellow); }
+
+.minio-import-html__plan-item-title {
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+}
+
+.minio-import-html__plan-item-url {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.minio-import-html__limit-hint {
+  font-size: var(--fs-xs);
+  color: var(--accent-yellow);
+}
+
+.minio-import-files__form,
+.minio-import-html__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.minio-import-files__field,
+.minio-import-html__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.minio-import-html__field {
+  flex-direction: row;
+  align-items: center;
+}
+
+.minio-import-html__limit { max-width: 220px; }
+
+.minio-import-html__form > label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.minio-import-files__list,
+.minio-import-html__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.minio-import-files__list-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.minio-import-files__remove {
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-4);
+  font-size: var(--fs-sm);
+  flex-shrink: 0;
+}
+
+.minio-import-files__actions,
+.minio-import-html__actions {
+  display: flex;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+/* Отчёты */
+.minio-import-files__report,
+.minio-import-html__report {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--bg-inner);
+  border: 1px solid var(--border-subtle);
+}
+
+.minio-import-files__report--ok,
+.minio-import-html__report--ok   { border-color: var(--accent-green); }
+.minio-import-files__report--fail,
+.minio-import-html__report--fail { border-color: var(--accent-red); }
+
+.minio-import-files__report-head,
+.minio-import-html__report-head {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semi);
+}
+
+.minio-import-files__report-message,
+.minio-import-html__report-message {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.minio-import-files__dup {
+  font-size: var(--fs-sm);
+  color: var(--accent-yellow);
+}
+
+.minio-import-files__tabs,
+.minio-import-html__tabs {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.minio-import-files__tab--active,
+.minio-import-html__tab--active {
+  background: var(--bg-button-light);
+  color: var(--text-inverse);
+}
+
+.minio-import-files__tab--active:hover,
+.minio-import-html__tab--active:hover {
+  background: #ededed;
+}
+
+.minio-import-files__stats,
+.minio-import-html__stats {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+
+.minio-import-files__stats th,
+.minio-import-files__stats td,
+.minio-import-html__stats th,
+.minio-import-html__stats td {
+  padding: var(--sp-2) var(--sp-4);
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.minio-import-files__stats th,
+.minio-import-html__stats th {
+  color: var(--text-muted);
+  font-weight: var(--fw-medium);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+/* Результаты — список с цветной полосой по статусу */
+.minio-import-files__results,
+.minio-import-html__results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.minio-import-files__result,
+.minio-import-html__result {
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-card);
+  border-radius: var(--r-md);
+  border-left: 3px solid var(--border-strong);
+}
+
+.minio-import-files__result--imported,
+.minio-import-files__result--dry_run,
+.minio-import-html__result--imported,
+.minio-import-html__result--dry_run { border-left-color: var(--accent-green); }
+
+.minio-import-files__result--unmatched,
+.minio-import-files__result--type_mismatch,
+.minio-import-files__result--skipped_unsupported,
+.minio-import-html__result--skipped_non_html_response { border-left-color: var(--accent-yellow); }
+
+.minio-import-files__result--upload_failed,
+.minio-import-files__result--db_failed,
+.minio-import-html__result--download_failed,
+.minio-import-html__result--upload_failed,
+.minio-import-html__result--db_failed { border-left-color: var(--accent-red); }
+
+.minio-import-files__result-head,
+.minio-import-html__result-head {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.minio-import-files__result-message,
+.minio-import-html__result-message {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  margin-top: var(--sp-1);
+}
+
+/* Раскрывающиеся «детали» с сырым JSON */
+.minio-import-files__plan-details,
+.minio-import-files__result-details,
+.minio-import-html__result-details {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-xs);
+}
+
+.minio-import-files__plan-details summary,
+.minio-import-files__result-details summary,
+.minio-import-html__result-details summary {
+  cursor: pointer;
+  color: var(--text-dim);
+}
+
+.minio-import-files__plan-pre,
+.minio-import-files__result-details pre,
+.minio-import-html__plan-pre,
+.minio-import-html__result-details pre {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3);
+  background: var(--bg-page);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

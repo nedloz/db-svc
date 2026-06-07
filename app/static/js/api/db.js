@@ -19,6 +19,13 @@ import { rowsToCsv } from '../utils/csv.js';
 
 const enc = encodeURIComponent;
 
+// PK в путь URL. Составной PK (объект) → URL-encoded JSON {col: val} (P-010);
+// одиночный — голое значение.
+function pkToPath(pk) {
+  if (pk && typeof pk === 'object') return enc(JSON.stringify(pk));
+  return enc(String(pk));
+}
+
 export async function getSchemas(opts = {}) {
   const data = await request('/api/db/schemas', opts);
   return data?.schemas || [];
@@ -34,14 +41,24 @@ export async function getColumns(schema, table, opts = {}) {
   return data?.columns || [];
 }
 
+// P-011: допустимые значения колонок (enum-типы + CHECK col IN (...)).
+// Возвращает { column: [values] }.
+export async function getColumnEnums(schema, table, opts = {}) {
+  const data = await request(`/api/db/${enc(schema)}/${enc(table)}/enums`, opts);
+  return data?.enums || {};
+}
+
 export async function listRows(
-  { schema, table, limit = 50, offset = 0, orderBy = null, filters = [] } = {},
+  { schema, table, limit = 50, offset = 0, orderBy = null, orderDir = null, filters = [] } = {},
   opts = {},
 ) {
   const params = new URLSearchParams();
   params.set('limit', String(limit));
   params.set('offset', String(offset));
-  if (orderBy) params.set('order_by', orderBy);
+  if (orderBy) {
+    const dir = orderDir === 'desc' ? 'desc' : 'asc';
+    params.set('order_by', `${orderBy} ${dir}`);
+  }
 
   const useMockOverlay = USE_MOCK_FILTERS || USE_MOCK_CRUD;
 
@@ -104,7 +121,7 @@ export async function updateRow(schema, table, pk, data, columns = [], opts = {}
     // TODO(backend): P-001 — заменить на PATCH /api/db/{schema}/{table}/{pk}
     return mockUpdate(schema, table, columns, pk, data);
   }
-  return request(`/api/db/${enc(schema)}/${enc(table)}/${enc(String(pk))}`, {
+  return request(`/api/db/${enc(schema)}/${enc(table)}/${pkToPath(pk)}`, {
     method: 'PATCH',
     body: data,
     ...opts,
@@ -117,7 +134,7 @@ export async function updateField(schema, table, pk, column, value, prevRow, col
     const next = { ...prevRow, [column]: value };
     return mockUpdate(schema, table, columns, pk, next);
   }
-  return request(`/api/db/${enc(schema)}/${enc(table)}/${enc(String(pk))}`, {
+  return request(`/api/db/${enc(schema)}/${enc(table)}/${pkToPath(pk)}`, {
     method: 'PATCH',
     body: { [column]: value },
     ...opts,
@@ -129,7 +146,7 @@ export async function deleteRow(schema, table, pk, columns = [], opts = {}) {
     // TODO(backend): P-001 — заменить на DELETE /api/db/{schema}/{table}/{pk}
     return mockDelete(schema, table, columns, pk);
   }
-  return request(`/api/db/${enc(schema)}/${enc(table)}/${enc(String(pk))}`, {
+  return request(`/api/db/${enc(schema)}/${enc(table)}/${pkToPath(pk)}`, {
     method: 'DELETE',
     ...opts,
   });
@@ -237,7 +254,7 @@ export async function previewCascade(schema, table, pk, opts = {}) {
     });
   }
   return request(
-    `/api/db/${enc(schema)}/${enc(table)}/${enc(String(pk))}/dependencies`,
+    `/api/db/${enc(schema)}/${enc(table)}/${pkToPath(pk)}/dependencies`,
     opts,
   );
 }

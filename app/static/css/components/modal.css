@@ -1,0 +1,69 @@
+/* Модалка — фон + центральная карточка. */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-5);
+  z-index: 1000;
+}
+
+.modal {
+  background: var(--bg-card);
+  border-radius: var(--r-lg);
+  width: 100%;
+  max-width: 640px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+
+.modal__header {
+  padding: var(--sp-5) var(--sp-7);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal__title {
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-bold);
+}
+
+.modal__close {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-full);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 20px;
+}
+
+.modal__close:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.modal__body {
+  padding: var(--sp-6) var(--sp-7);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.modal__footer {
+  padding: var(--sp-4) var(--sp-7);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  gap: var(--sp-3);
+  justify-content: flex-end;
+}
