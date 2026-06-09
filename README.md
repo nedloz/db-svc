@@ -46,7 +46,10 @@ DBSVC_ADMIN_TOKEN=change_me  # если пусто — токен не треб�
 ```bash
 docker compose up -d --build dbservice # ???
 ```
+---
 ```bash
+cd pochemuchnic-miem-prj
+
 Первый раз (поднять зависимости):
 
 docker compose up -d postgres minio

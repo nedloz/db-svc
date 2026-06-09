@@ -18,6 +18,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import UploadFile
 
 from app.services.pg import get_conn
+from app.services.html_processor import clean_html_for_rag
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".html", ".htm"}
 CONTENT_TYPE_BY_EXT = {
@@ -375,6 +376,8 @@ def import_remote_html_to_minio(dry_run: bool = False, limit: int | None = None,
         "upload_failed": 0,
         "db_failed": 0,
         "skipped_non_html_response": 0,
+        "txt_converted": 0,
+        "txt_conversion_failed": 0,
         "dry_run": dry_run,
         "force": force,
     }
@@ -461,6 +464,29 @@ def import_remote_html_to_minio(dry_run: bool = False, limit: int | None = None,
                 "message": str(exc),
             })
             continue
+
+        # --- Текстовая версия для RAG-чанкинга ---
+        # Рядом с сырым .html кладём очищенный .txt (Markdown без nav/footer/скриптов).
+        # Сбой конвертации НЕ роняет импорт самого .html — просто .txt не создаётся.
+        txt_storage_key: str | None = None
+        try:
+            encoding_hint = (response_content_type or "utf-8").split("charset=")[-1].split(";")[0].strip() or "utf-8"
+            markdown_text = clean_html_for_rag(body, encoding=encoding_hint)
+            txt_storage_key = storage_key.rsplit(".", 1)[0] + ".txt"
+            txt_bytes = markdown_text.encode("utf-8")
+            with tempfile.SpooledTemporaryFile() as txt_tmp:
+                txt_tmp.write(txt_bytes)
+                txt_tmp.seek(0)
+                client.upload_fileobj(
+                    Fileobj=txt_tmp,
+                    Bucket=bucket,
+                    Key=txt_storage_key,
+                    ExtraArgs={"ContentType": "text/plain; charset=utf-8"},
+                )
+            stats["txt_converted"] += 1
+        except Exception:
+            stats["txt_conversion_failed"] += 1
+            txt_storage_key = None
 
         try:
             with get_conn() as conn:
