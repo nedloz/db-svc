@@ -1,46 +1,72 @@
-# db-svc (Postgres + MinIO admin microservice)
+# db-svc — Микросервис администрирования БД и Хранилища
 
-Админ-панель на `localhost:3401` (порт настраивается) для:
-- просмотра и **редактирования** (CRUD) строк Postgres: фильтры, сортировка, составные PK, выпадающие списки из CHECK/enum
-- импорта CSV в существующую таблицу (построчно, с превью и построчным отчётом об ошибках) и связанного датасета из 8 файлов с UUID-ремаппингом
-- загрузки/просмотра/скачивания/удаления файлов в MinIO через presigned URL, импорта файлов по title и HTML по `origin_url` (с конвертацией HTML→Markdown)
-- отслеживания прогресса длительных операций через `/api/jobs/{id}`
+Синхронный микросервис на базе **FastAPI**, **psycopg 3** и **MinIO S3 (boto3)**, предназначенный для просмотра и редактирования каталога общей PostgreSQL-базы (схемы `core`, `auth`, `chat`, `library`), импорта CSV/датасетов и управления файлами документов в MinIO.
 
-## 1) .env
+Является инструментом контент-менеджера в экосистеме **«ИИ-помощник студента» (НИУ ВШЭ МИЭМ)**: сам данных не хранит, а администрирует базу, которой питается RAG-чат. db-svc не предоставляет пользовательских функций чата — только служебный CRUD над базой знаний.
 
-Используются два файла.
+---
 
-Корневой `.env` проекта — задаёт порт наружу и токен, docker-compose прокидывает их в контейнер:
+## Роль в архитектуре системы
 
-```env
-DBSVC_PUBLIC_PORT=3401
-DBSVC_ADMIN_TOKEN=123456
-```
+db-svc ходит напрямую в общий Postgres и в MinIO — не через другие сервисы экосистемы (`rag-svc`, `llm-svc`, `chat-svc` и т.д. не задействованы).
+Загрузка/скачивание самих файлов идёт по presigned URL напрямую между браузером и MinIO — db-svc лишь выдаёт подписанную ссылку, байты через него не проходят.
 
-`services/db-svc/.env` — креды подключения к Postgres/MinIO (см. [.env.example](.env.example)):
+---
 
-```env
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-POSTGRES_DB=app_db
-POSTGRES_USER=app_user
-POSTGRES_PASSWORD=app_pass
+## Возможности и особенности
 
-MINIO_ENDPOINT=minio:9000
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
-MINIO_BUCKET=documents
-MINIO_REGION=us-east-1
-MINIO_SECURE=false
-MINIO_PUBLIC_ENDPOINT=localhost:9000  # хост для presigned URL, должен резолвиться из браузера
-MINIO_PUBLIC_SECURE=false
+- CRUD строк любой таблицы любой схемы: модалка и inline-редактирование, составные первичные ключи, выпадающие списки значений из CHECK-constraint/enum, серверные фильтры и сортировка.
+- CSV-импорт в существующую таблицу: построчная вставка (`INSERT` + `SAVEPOINT` на строку, не bulk `COPY`) с отчётом по каждой упавшей строке; колонки матчатся по имени из `HEADER`, порядок не важен.
+- Связанный dataset-импорт: 8 CSV-файлов (университеты, кампусы, факультеты, корпуса, программы, темы, документы, document_relations), UUID для новых записей генерируются и связываются автоматически; есть `dry_run`.
+- Управление файлами в MinIO: список, presigned upload/download, удаление; импорт файлов с мэтчингом по title к `library.documents`; импорт HTML по `origin_url` с конвертацией HTML → Markdown для RAG.
+- Прогресс длительных операций через `/api/jobs/{id}` (создаётся при импорте, поддерживает отмену).
+- Bearer-авторизация (`DBSVC_ADMIN_TOKEN`) на всех `/api/*`; без токена — dev-режим без авторизации.
+- Строгая валидация идентификаторов схем/таблиц/колонок регэкспом, без ORM — чистый SQL через psycopg.
+- Фронтенд — vanilla HTML/CSS/JS (ES-модули), без сборщиков и фреймворков, дизайн по макетам Figma.
 
-DBSVC_ADMIN_TOKEN=123456  # если пусто — токен не требуется; токен хранится в localStorage браузера!
-```
+---
 
-`123456`/`minioadmin`/`app_pass` — дев-значения. Перед прод-деплоем заменить на реальные секреты.
+## Данные, с которыми работает сервис
 
-## 2) docker-compose фрагмент
+В отличие от сервисов-владельцев своих таблиц, db-svc — клиент общей базы `app_db` и своей схемы не имеет (кроме служебной таблицы задач):
+
+- **`core`** — справочники вуза: universities, campuses, faculties, buildings, programs.
+- **`auth`** — пользователи и токены (владелец `auth-svc`, здесь только читаются/редактируются вручную).
+- **`chat`** — история переписок и фидбек (владелец `chat-svc`).
+- **`library`** — база знаний: documents, chunks, chunk_embeddings (`VECTOR(1024)`), document_files, document_relations, contacts, places. Основная зона редактирования через db-svc.
+- **`public.dbsvc_jobs`** — служебная таблица самого db-svc для отслеживания прогресса импортов (создаётся автоматически при старте).
+
+Полная схема — `infra/db/init/init.sql` в корне проекта.
+
+---
+
+## Переменные окружения
+
+| Переменная | Файл | Обязательна | По умолчанию | Описание |
+| :--- | :--- | :---: | :--- | :--- |
+| `DBSVC_PUBLIC_PORT` | корневой `.env` | Да | — | Внешний порт, проброс на 8000 внутри контейнера. |
+| `DBSVC_ADMIN_TOKEN` | оба `.env` | Нет | пусто (auth выкл.) | Bearer-токен для всех `/api/*`. |
+| `POSTGRES_HOST` | `services/db-svc/.env` | Нет | `postgres` | Хост PostgreSQL. |
+| `POSTGRES_PORT` | `services/db-svc/.env` | Нет | `5432` | Порт PostgreSQL. |
+| `POSTGRES_DB` | `services/db-svc/.env` | Нет | `app_db` | Имя базы данных. |
+| `POSTGRES_USER` | `services/db-svc/.env` | Нет | `app_user` | Пользователь БД. |
+| `POSTGRES_PASSWORD` | `services/db-svc/.env` | Нет | `app_password` | Пароль пользователя БД. |
+| `MINIO_ENDPOINT` | `services/db-svc/.env` | Нет | `minio:9000` | Внутренний адрес MinIO (для запросов из контейнера). |
+| `MINIO_ACCESS_KEY` | `services/db-svc/.env` | Нет | `minioadmin` | Access key MinIO. |
+| `MINIO_SECRET_KEY` | `services/db-svc/.env` | Нет | `minioadmin` | Secret key MinIO. |
+| `MINIO_BUCKET` | `services/db-svc/.env` | Нет | `documents` | Имя бакета с файлами. |
+| `MINIO_REGION` | `services/db-svc/.env` | Нет | `us-east-1` | Регион S3-подписи. |
+| `MINIO_SECURE` | `services/db-svc/.env` | Нет | `false` | HTTPS для внутренних запросов к MinIO. |
+| `MINIO_PUBLIC_ENDPOINT` | `services/db-svc/.env` | Нет | `localhost:9000` | Хост MinIO для presigned URL — должен резолвиться из браузера, а не из контейнера. |
+| `MINIO_PUBLIC_SECURE` | `services/db-svc/.env` | Нет | значение `MINIO_SECURE` | HTTPS для presigned URL. |
+
+Дев-значения (`123456`, `minioadmin`, `app_pass`) заменить на реальные секреты перед прод-деплоем.
+
+---
+
+## Быстрый запуск
+
+### Вариант 1: через общий docker-compose
 
 ```yaml
   db-svc:
@@ -68,8 +94,6 @@ DBSVC_ADMIN_TOKEN=123456  # если пусто — токен не требуе
     restart: unless-stopped
 ```
 
-## 3) Запуск
-
 ```bash
 cd pochemuchnic-miem-prj
 
@@ -83,7 +107,7 @@ docker compose up -d --build db-svc
 docker compose build --no-cache db-svc
 docker compose up -d db-svc
 
-# Посмотреть логи:
+# Логи:
 docker compose logs -f db-svc
 
 # Остановить:
@@ -92,13 +116,107 @@ docker compose down
 docker compose down -v       # со стиранием данных
 ```
 
-Открыть: http://localhost:3401 (или другой `DBSVC_PUBLIC_PORT`)
+Открыть: `http://localhost:3401` (или другой `DBSVC_PUBLIC_PORT`). Если задан `DBSVC_ADMIN_TOKEN` — вставить его в поле вверху страницы и нажать «Сохранить» (сохранится в `localStorage`).
 
-Если задан `DBSVC_ADMIN_TOKEN`, вставь его в поле вверху и нажми «Сохранить».
+### Вариант 2: локальный запуск (Python)
 
-## 4) Ограничения (осознанно упрощено)
+Postgres и MinIO должны быть доступны отдельно (например, `docker compose up -d postgres minio` с проброшенными портами).
 
-- Имена схем/таблиц/колонок разрешены только в формате `[A-Za-z_][A-Za-z0-9_]*`.
-- CSV импорт: строки вставляются по одной (`INSERT` + `SAVEPOINT` на строку) — не bulk `COPY`, зато отчёт по каждой упавшей строке. `HEADER` обязателен, порядок колонок значения не имеет (матчинг по имени); неизвестные или отсутствующие обязательные колонки — импорт отклоняется целиком до начала вставки.
-- MinIO `GET /objects` — не больше 1000 объектов за раз (по умолчанию 200), пагинация через `continuation_token`.
-- Presigned URL живут 10 минут, refresh-эндпоинта нет.
+```bash
+cd services/db-svc
+
+python -m venv venv
+# Windows: venv\Scripts\activate
+# Linux/macOS: source venv/bin/activate
+
+pip install -r requirements.txt
+
+cp .env.example .env   # и поправить хосты/порты под локальный запуск
+
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+---
+
+## Документация API
+
+Все `/api/*` требуют `Authorization: Bearer <DBSVC_ADMIN_TOKEN>`. `/`, `/static/*`, `/health` — без токена.
+
+## root
+
+| METHOD | PATH |
+|---|---|
+| GET | `/health` |
+| GET | `/` |
+| GET | `/static/*` |
+
+## db — `/api/db/*` ([app/routes/db.py](app/routes/db.py))
+
+| METHOD | PATH |
+|---|---|
+| GET | `/schemas` |
+| GET | `/connection/status` |
+| GET | `/import/dataset/status` |
+| POST | `/import/dataset` |
+| POST | `/import/csv` |
+| GET | `/{schema}/tables` |
+| GET | `/{schema}/{table}/columns` |
+| GET | `/{schema}/{table}/enums` |
+| GET | `/{schema}/{table}/rows` |
+| POST | `/{schema}/{table}/query` |
+| POST | `/{schema}/{table}` |
+| PATCH | `/{schema}/{table}/{pk}` |
+| DELETE | `/{schema}/{table}/{pk}` |
+| GET | `/{schema}/{table}/relations` |
+| GET | `/{schema}/{table}/relations/inbound` |
+| GET | `/{schema}/{table}/{pk}/dependencies` |
+| GET | `/{schema}/{table}/export.csv` |
+
+## minio — `/api/minio/*` ([app/routes/minio.py](app/routes/minio.py))
+
+| METHOD | PATH |
+|---|---|
+| GET | `/objects` |
+| POST | `/presign/upload` |
+| GET | `/presign/download` |
+| DELETE | `/object` |
+| GET | `/import-plan` |
+| POST | `/import/files` |
+| GET | `/import/html-plan` |
+| POST | `/import/html-from-documents` |
+
+## jobs — `/api/jobs/*` ([app/routes/jobs.py](app/routes/jobs.py))
+
+| METHOD | PATH |
+|---|---|
+| GET | `/{job_id}` |
+| DELETE | `/{job_id}` |
+
+---
+
+## Структура репозитория
+
+```
+services/db-svc/
+├── Dockerfile              # python:3.12-slim, uvicorn на порту 8000
+├── requirements.txt        # FastAPI, psycopg[binary], boto3, html2text, beautifulsoup4
+├── .env.example            # шаблон переменных окружения сервиса
+├── README.md            # этот файл
+├── API_quick.md         # краткий список всех эндпоинтов
+└── app/
+    ├── main.py             # точка входа, auth-middleware, монтирование /static
+    ├── core/
+    │   └── auth.py         # require_auth(): проверка Bearer DBSVC_ADMIN_TOKEN
+    ├── routes/             # /api/db/*, /api/minio/*, /api/jobs/*
+    ├── services/           # psycopg-запросы, boto3, импорт-пайплайны, jobs
+    ├── legacy/             # read-only референс предыдущей MVP-админки
+    └── static/             # текущий фронтенд
+        ├── index.html
+        ├── css/
+        └── js/
+            ├── api/        # fetch-обёртки (client.js, db.js, minio.js)
+            ├── state/      # store.js — pub/sub состояние
+            ├── components/ # переиспользуемые UI-блоки
+            ├── views/      # db-explorer/, import/, minio/
+            └── utils/
+```
