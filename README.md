@@ -32,6 +32,8 @@ MINIO_SECRET_KEY=minioadmin
 MINIO_BUCKET=documents
 MINIO_REGION=us-east-1
 MINIO_SECURE=false
+MINIO_PUBLIC_ENDPOINT=localhost:9000  # хост для presigned URL, должен резолвиться из браузера
+MINIO_PUBLIC_SECURE=false
 
 DBSVC_ADMIN_TOKEN=123456  # если пусто — токен не требуется; токен хранится в localStorage браузера!
 ```
