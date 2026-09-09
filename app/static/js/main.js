@@ -18,8 +18,9 @@ import { createOperationsIndicator } from './components/operations-indicator.js'
 import { dbExplorerView } from './views/db-explorer/index.js';
 import { importView } from './views/import/index.js';
 import { minioView } from './views/minio/index.js';
+import { graphView } from './views/graph/index.js';
 
-const VIEWS = [dbExplorerView, importView, minioView];
+const VIEWS = [dbExplorerView, importView, minioView, graphView];
 const HEALTH_INTERVAL_MS = 30000;
 
 const root = document.getElementById('app');

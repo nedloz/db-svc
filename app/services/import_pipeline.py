@@ -94,10 +94,13 @@ def _old_id(v: Any) -> str | None:
     return s
 
 
-def _to_int(v: Any) -> int | None:
+def _to_int(v: Any, default: int | None = None) -> int | None:
+    """Число из ячейки CSV. `default` — для колонок, объявленных NOT NULL DEFAULT: они
+    перечислены в INSERT явно, поэтому None из пустой ячейки перекрыл бы значение по
+    умолчанию и упёрся бы в ограничение NOT NULL."""
     s = _s(v)
     if s is None:
-        return None
+        return default
     return int(float(s))
 
 
@@ -293,16 +296,30 @@ def _prepare_rows(raw: dict[str, list[dict[str, Any]]], report: ImportReport) ->
     for r in raw["topics"]:
         pid = _old_id(r.get("parent_id"))
         rows["topics"].append((
-            maps["topics"][_old_id(r["id"])], maps["topics"].get(pid), r.get("name"), r.get("slug"), r.get("description"), _to_int(r.get("order_index")),
+            maps["topics"][_old_id(r["id"])], maps["topics"].get(pid), r.get("name"), r.get("slug"), r.get("description"),
+            # order_index INT NOT NULL DEFAULT 0 — см. init.sql
+            _to_int(r.get("order_index"), 0),
         ))
 
     for idx, r in enumerate(raw["documents"], 1):
         tid = _old_id(r.get("topic_id"))
         scope = _parse_scope(r.get("scope_json"), maps, report, f"documents[{idx}]")
+        # Значения ниже дублируют DEFAULT из main/infra/db/init/init.sql: эти колонки
+        # объявлены NOT NULL DEFAULT, но перечислены в INSERT явно, поэтому пустая ячейка
+        # CSV записала бы NULL вместо значения по умолчанию и импорт падал бы на ограничении.
         rows["documents"].append((
             maps["documents"][_old_id(r["id"])], maps["topics"].get(tid), r.get("title"), r.get("category"), r.get("source_type"),
-            r.get("content_type"), r.get("language"), r.get("status"), _to_int(r.get("priority")), r.get("origin_url"),
-            None, Json(scope) if scope is not None else None, r.get("ingest_status"), r.get("indexed_at"), r.get("ingest_error"), _to_int(r.get("content_version")), None,
+            r.get("content_type"),
+            _s(r.get("language")) or "ru",              # language TEXT NOT NULL DEFAULT 'ru'
+            _s(r.get("status")) or "draft",             # status TEXT NOT NULL DEFAULT 'draft'
+            _to_int(r.get("priority"), 0),              # priority INT NOT NULL DEFAULT 0
+            r.get("origin_url"),
+            None,
+            Json(scope) if scope is not None else Json({}),   # scope_json JSONB NOT NULL DEFAULT '{}'
+            _s(r.get("ingest_status")) or "pending",    # ingest_status TEXT NOT NULL DEFAULT 'pending'
+            r.get("indexed_at"), r.get("ingest_error"),
+            _to_int(r.get("content_version"), 1),       # content_version INT NOT NULL DEFAULT 1
+            None,
         ))
 
     for r in raw["document_relations"]:
@@ -330,15 +347,28 @@ SQL = {
     "document_relations": "INSERT INTO library.document_relations (id, from_document_id, to_document_id, relation_type, label) VALUES (%s,%s,%s,%s,%s)",
 }
 
-TRUNCATE_SQL = [
-    "TRUNCATE TABLE library.document_relations CASCADE",
-    "TRUNCATE TABLE library.documents CASCADE",
-    "TRUNCATE TABLE library.topics CASCADE",
-    "TRUNCATE TABLE core.programs CASCADE",
-    "TRUNCATE TABLE core.buildings CASCADE",
-    "TRUNCATE TABLE core.faculties CASCADE",
-    "TRUNCATE TABLE core.campuses CASCADE",
-    "TRUNCATE TABLE core.universities CASCADE",
+# DELETE, а не TRUNCATE ... CASCADE.
+#
+# TRUNCATE CASCADE игнорирует объявленные в схеме действия ON DELETE и вычищает целиком
+# КАЖДУЮ таблицу, которая ссылается на очищаемую. На core.universities/campuses/faculties/
+# programs ссылается auth.user_profiles (а на core.buildings — core.contacts и core.places),
+# и все эти ссылки объявлены как ON DELETE SET NULL. То есть импорт датасета в режиме замены
+# удалял все профили пользователей системы вместо того, чтобы обнулить у них справочные поля.
+# Обнаружено на живом стенде: после импорта у администратора пропал профиль, вместе с ним
+# `GET /users/me` начал отвечать 404, и админ-панель стала недоступна.
+#
+# DELETE соблюдает ON DELETE: SET NULL обнуляет ссылку, CASCADE удаляет подчинённые строки
+# (chunks, document_files, document_relations уходят вместе с документами — это и требуется).
+# Порядок — от подчинённых к родительским. Таблицы небольшие, разница в скорости не важна.
+DELETE_SQL = [
+    "DELETE FROM library.document_relations",
+    "DELETE FROM library.documents",
+    "DELETE FROM library.topics",
+    "DELETE FROM core.programs",
+    "DELETE FROM core.buildings",
+    "DELETE FROM core.faculties",
+    "DELETE FROM core.campuses",
+    "DELETE FROM core.universities",
 ]
 
 
@@ -376,8 +406,8 @@ def run_dataset_import(files: dict[str, tuple[str, bytes]], dry_run: bool = Fals
     with get_conn() as conn:
         with conn.cursor() as cur:
             if replace_mode:
-                report.info("TRUNCATE целевых таблиц")
-                for stmt in TRUNCATE_SQL:
+                report.info("Очистка целевых таблиц")
+                for stmt in DELETE_SQL:
                     if cancel_check is not None and cancel_check():
                         raise RuntimeError("Job cancelled")
                     cur.execute(stmt)

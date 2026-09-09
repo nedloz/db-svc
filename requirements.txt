@@ -5,3 +5,4 @@ boto3==1.35.76
 python-multipart==0.0.9
 html2text==2025.4.15
 beautifulsoup4==4.15.0
+httpx==0.28.1

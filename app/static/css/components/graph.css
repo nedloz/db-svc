@@ -1,0 +1,228 @@
+/* Вкладка «Граф»: сводка + двухпанельный браузер сущностей (список слева, карточка справа). */
+
+.graph-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4, 16px);
+}
+
+/* ---------- сводка ---------- */
+
+.graph-stats__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4, 16px);
+  margin-bottom: var(--space-4, 16px);
+}
+
+.graph-stats__metric {
+  min-width: 120px;
+  padding: var(--space-3, 12px);
+  border: 1px solid var(--color-border, #d9d9d9);
+  border-radius: var(--radius-md, 8px);
+}
+
+.graph-stats__metric-value {
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.graph-stats__metric-label {
+  font-size: 12px;
+  color: var(--color-text-muted, #6b7280);
+}
+
+.graph-stats__subtitle {
+  margin: var(--space-4, 16px) 0 var(--space-2, 8px);
+  font-weight: 600;
+}
+
+.graph-stats__table-wrap {
+  overflow-x: auto;
+}
+
+.graph-stats__actions {
+  margin-top: var(--space-3, 12px);
+  /* Кнопок стало две («Обновить» и запуск пересборки), нужен зазор и перенос на узком экране. */
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2, 8px);
+  align-items: center;
+}
+
+/* ---------- браузер сущностей ---------- */
+
+.graph-browser {
+  display: grid;
+  grid-template-columns: minmax(260px, 360px) 1fr;
+  gap: var(--space-4, 16px);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .graph-browser {
+    grid-template-columns: 1fr;
+  }
+}
+
+.graph-browser__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2, 8px);
+  margin-bottom: var(--space-2, 8px);
+}
+
+.graph-browser__controls .input {
+  flex: 1 1 120px;
+  min-width: 0;
+}
+
+.graph-browser__merge-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2, 8px);
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  margin-bottom: var(--space-2, 8px);
+  border: 1px solid var(--color-accent, #2563eb);
+  border-radius: var(--radius-md, 8px);
+  font-size: 13px;
+}
+
+.graph-browser__items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 560px;
+  overflow-y: auto;
+}
+
+.graph-browser__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  width: 100%;
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm, 6px);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.graph-browser__item:hover {
+  background: var(--color-surface-hover, #f3f4f6);
+}
+
+.graph-browser__item.is-selected {
+  border-color: var(--color-accent, #2563eb);
+  background: var(--color-surface-hover, #f3f4f6);
+}
+
+.graph-browser__item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-browser__item-type,
+.graph-browser__item-flag {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--color-surface-alt, #eef2f7);
+  color: var(--color-text-muted, #6b7280);
+}
+
+/* unknown — очередь на ручную типизацию, её видно сразу */
+.graph-browser__item-type.is-unknown {
+  background: #fde68a;
+  color: #7c2d12;
+}
+
+/* ---------- карточка ---------- */
+
+.graph-card__title {
+  margin: 0 0 var(--space-3, 12px);
+  font-size: 18px;
+}
+
+.graph-card__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2, 8px);
+  margin-bottom: var(--space-3, 12px);
+}
+
+.graph-card__row--danger {
+  margin-top: var(--space-4, 16px);
+  padding-top: var(--space-3, 12px);
+  border-top: 1px solid var(--color-border, #d9d9d9);
+}
+
+.graph-card__section {
+  margin: var(--space-4, 16px) 0 var(--space-2, 8px);
+  font-weight: 600;
+}
+
+.graph-card__aliases {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.graph-card__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--color-surface-alt, #eef2f7);
+  font-size: 12px;
+}
+
+.graph-card__chip-remove {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--color-text-muted, #6b7280);
+}
+
+.graph-card__relations,
+.graph-card__chunks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.graph-card__relation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2, 8px);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--color-surface-alt, #eef2f7);
+  font-size: 13px;
+}
+
+.graph-card__chunk summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.graph-card__chunk-text {
+  padding: var(--space-2, 8px);
+  margin-top: 4px;
+  border-left: 2px solid var(--color-border, #d9d9d9);
+  font-size: 12px;
+  white-space: pre-wrap;
+  color: var(--color-text-muted, #6b7280);
+}
