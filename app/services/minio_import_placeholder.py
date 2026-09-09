@@ -257,11 +257,18 @@ def _sanitize_filename(value: str) -> str:
     return value or "document"
 
 
-def _build_html_filename(doc: RemoteHtmlDocument) -> str:
+def _build_source_filename(doc: RemoteHtmlDocument) -> str:
+    """Имя сохраняемого файла — всегда .txt.
+
+    Страница скачивается как HTML, но в хранилище попадает уже очищенный текст, поэтому и
+    расширение, и ключ в MinIO (`_build_storage_key` берёт его отсюда), и запись в
+    library.document_files описывают именно .txt. Упоминаний html в этой цепочке быть
+    не должно: ingest-worker читает её напрямую и обрабатывает файл по расширению.
+    """
     parsed = urlparse(doc.origin_url)
     stem = Path(parsed.path).stem or _sanitize_filename(doc.title)
     stem = _sanitize_filename(stem)
-    return f"{stem}.html"
+    return f"{stem}.txt"
 
 
 def _load_remote_html_documents() -> list[RemoteHtmlDocument]:
@@ -395,7 +402,7 @@ def import_remote_html_to_minio(dry_run: bool = False, limit: int | None = None,
             progress_cb(idx - 1, total, "download", f"Processing {idx}/{total}")
         if cancel_check is not None and cancel_check():
             raise RuntimeError("Job cancelled")
-        filename = _build_html_filename(doc)
+        filename = _build_source_filename(doc)
         try:
             body, response_content_type = _download_remote_html(doc.origin_url)
         except (HTTPError, URLError, TimeoutError, Exception) as exc:
@@ -443,16 +450,48 @@ def import_remote_html_to_minio(dry_run: bool = False, limit: int | None = None,
             })
             continue
 
+        # Сырой HTML в хранилище не попадает. Страница очищается ДО загрузки, и в MinIO
+        # уезжает только текстовая версия; library.document_files, из которой читает
+        # ingest-worker, ссылается исключительно на .txt.
+        #
+        # Раньше клались оба файла, а в таблицу записывался .html — и в индекс уходила
+        # разметка целиком, вместе с <script>, <head> и меню. На живом стенде это дало
+        # 126 чанков с тегами из 662, а самые объёмные страницы валили embedding-svc по
+        # размеру запроса. Хранить исходную разметку незачем: при изменении очистки страницу
+        # всё равно нужно скачивать заново по origin_url, а checksum ниже показывает,
+        # изменился ли источник.
         try:
-            with tempfile.SpooledTemporaryFile() as tmp:
-                tmp.write(body)
-                tmp.seek(0)
+            encoding_hint = (response_content_type or "utf-8").split("charset=")[-1].split(";")[0].strip() or "utf-8"
+            markdown_text = clean_html_for_rag(body, encoding=encoding_hint)
+        except Exception as exc:
+            # Без очищенного текста документ не импортируется вовсе: класть вместо него
+            # разметку нельзя, а пустую запись создавать бессмысленно.
+            stats["txt_conversion_failed"] += 1
+            results.append({
+                "document_id": doc.id,
+                "title": doc.title,
+                "origin_url": doc.origin_url,
+                "ok": False,
+                "status": "html_cleanup_failed",
+                "message": str(exc),
+            })
+            continue
+
+        txt_bytes = markdown_text.encode("utf-8")
+        txt_size_bytes = len(txt_bytes)
+        txt_sha256 = hashlib.sha256(txt_bytes).hexdigest()
+
+        try:
+            with tempfile.SpooledTemporaryFile() as txt_tmp:
+                txt_tmp.write(txt_bytes)
+                txt_tmp.seek(0)
                 client.upload_fileobj(
-                    Fileobj=tmp,
+                    Fileobj=txt_tmp,
                     Bucket=bucket,
                     Key=storage_key,
-                    ExtraArgs={"ContentType": "text/html; charset=utf-8"},
+                    ExtraArgs={"ContentType": "text/plain; charset=utf-8"},
                 )
+            stats["txt_converted"] += 1
         except (ClientError, BotoCoreError, Exception) as exc:
             stats["upload_failed"] += 1
             results.append({
@@ -465,29 +504,6 @@ def import_remote_html_to_minio(dry_run: bool = False, limit: int | None = None,
             })
             continue
 
-        # --- Текстовая версия для RAG-чанкинга ---
-        # Рядом с сырым .html кладём очищенный .txt (Markdown без nav/footer/скриптов).
-        # Сбой конвертации НЕ роняет импорт самого .html — просто .txt не создаётся.
-        txt_storage_key: str | None = None
-        try:
-            encoding_hint = (response_content_type or "utf-8").split("charset=")[-1].split(";")[0].strip() or "utf-8"
-            markdown_text = clean_html_for_rag(body, encoding=encoding_hint)
-            txt_storage_key = storage_key.rsplit(".", 1)[0] + ".txt"
-            txt_bytes = markdown_text.encode("utf-8")
-            with tempfile.SpooledTemporaryFile() as txt_tmp:
-                txt_tmp.write(txt_bytes)
-                txt_tmp.seek(0)
-                client.upload_fileobj(
-                    Fileobj=txt_tmp,
-                    Bucket=bucket,
-                    Key=txt_storage_key,
-                    ExtraArgs={"ContentType": "text/plain; charset=utf-8"},
-                )
-            stats["txt_converted"] += 1
-        except Exception:
-            stats["txt_conversion_failed"] += 1
-            txt_storage_key = None
-
         try:
             with get_conn() as conn:
                 _upsert_document_file_manual(
@@ -497,9 +513,11 @@ def import_remote_html_to_minio(dry_run: bool = False, limit: int | None = None,
                     storage_key=storage_key,
                     storage_path=storage_path,
                     filename=filename,
-                    mime_type="text/html",
-                    size_bytes=size_bytes,
-                    sha256=sha256,
+                    mime_type="text/plain; charset=utf-8",
+                    size_bytes=txt_size_bytes,
+                    # Хеш описывает сохранённый файл. documents.checksum ниже — хеш исходной
+                    # страницы: именно он показывает, изменился ли источник.
+                    sha256=txt_sha256,
                 )
                 with conn.cursor() as cur:
                     cur.execute(
