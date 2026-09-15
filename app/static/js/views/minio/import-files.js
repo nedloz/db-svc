@@ -3,11 +3,12 @@
 // results с разными статусами (imported / dry_run / unmatched / type_mismatch /
 // upload_failed / db_failed / skipped_unsupported).
 //
-// UX как у M8: «Dry-run» (всегда доступен), «Применить» (разблокируется только
-// после успешного dry-run для текущего набора файлов). Отчёт — табы.
+// UX как у M8: «Dry-run» и «Применить» доступны независимо; если dry-run на текущем
+// наборе файлов не проходил, «Применить» переспрашивает. Отчёт — табы.
 
 import { createStore } from '../../state/store.js';
 import { createErrorView } from '../../components/error-view.js';
+import { confirmApplyWithoutDryRun } from '../../components/confirm-no-dry-run.js';
 import { createFilePicker } from '../../components/form-controls.js';
 import { toast } from '../../components/toast.js';
 import { importFilesToMinio, getImportPlan } from '../../api/minio.js';
@@ -133,11 +134,20 @@ export function mountMinioImportFiles(container, { onImported } = {}) {
     applyBtn.className = 'btn btn--primary';
     applyBtn.textContent = s.busy === 'apply' ? 'Импорт идёт…' : 'Применить';
     const applyReady = s.lastDryRun && s.lastDryRun.signature === currentSignature();
-    applyBtn.disabled = !!s.busy || !applyReady;
+    applyBtn.disabled = !!s.busy || !s.files.length;
     applyBtn.title = applyReady
-      ? 'Применить (dry-run прошёл, файлы не менялись)'
-      : 'Сначала Dry-run, потом «Применить»';
-    applyBtn.addEventListener('click', () => run(false));
+      ? 'Dry-run прошёл на этих файлах — импорт пройдёт так же'
+      : 'Dry-run на текущих файлах не проходил: план не проверен';
+    applyBtn.addEventListener('click', () => {
+      if (applyReady) {
+        run(false);
+        return;
+      }
+      confirmApplyWithoutDryRun({
+        text: 'Dry-run на выбранных файлах не проходил — сопоставление с library.documents по title и типы файлов не проверены.',
+        onConfirm: () => run(false),
+      });
+    });
 
     wrap.append(dryBtn, applyBtn);
     return wrap;

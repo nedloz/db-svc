@@ -9,12 +9,22 @@ import { request } from './client.js';
 
 const enc = encodeURIComponent;
 
-export async function listObjects(prefix = '', opts = {}) {
-  const qs = prefix ? `?prefix=${enc(prefix)}` : '';
-  const data = await request(`/api/minio/objects${qs}`, opts);
+// Постраничный листинг. MinIO отдаёт страницы курсором (continuation_token), а не
+// offset'ом: прыгнуть на произвольную страницу нельзя, только идти вперёд от токена.
+// Назад ходим по стеку уже виденных токенов — его держит вызывающий код.
+export async function listObjects(prefix = '', { maxKeys, continuationToken, ...opts } = {}) {
+  const params = new URLSearchParams();
+  if (prefix) params.set('prefix', prefix);
+  if (maxKeys) params.set('max_keys', String(maxKeys));
+  if (continuationToken) params.set('continuation_token', continuationToken);
+  const qs = params.toString();
+
+  const data = await request(`/api/minio/objects${qs ? `?${qs}` : ''}`, opts);
   return {
     bucket: data?.bucket || '',
     items: data?.items || [],
+    isTruncated: Boolean(data?.is_truncated),
+    nextToken: data?.next_continuation_token || null,
   };
 }
 

@@ -2,12 +2,13 @@
 // POST /api/minio/import/html-from-documents (form: dry_run, force, limit).
 // Бэк сам скачивает каждую страницу, кладёт в MinIO, обновляет storage_key.
 //
-// Кнопки: «Dry-run» / «Применить» (после успешного dry-run для текущих флагов).
-// Флаги: dry_run, force (переимпортировать уже загруженные), limit (число).
+// Кнопки: «Dry-run» / «Применить» — независимы; без свежего успешного dry-run
+// «Применить» переспрашивает. Флаги: force (перекачать уже загруженные), limit (число).
 
 import { createStore } from '../../state/store.js';
 import { createInput } from '../../components/form-controls.js';
 import { createErrorView } from '../../components/error-view.js';
+import { confirmApplyWithoutDryRun } from '../../components/confirm-no-dry-run.js';
 import { toast } from '../../components/toast.js';
 import { importHtmlFromDocuments, getHtmlImportPlan } from '../../api/minio.js';
 
@@ -183,9 +184,23 @@ export function mountMinioImportHtml(container, { onImported } = {}) {
     applyBtn.className = 'btn btn--primary';
     applyBtn.textContent = s.busy === 'apply' ? 'Импорт идёт…' : 'Применить';
     const ready = s.lastDryRun && s.lastDryRun.signature === currentSignature();
-    applyBtn.disabled = !!s.busy || !ready;
-    applyBtn.title = ready ? 'Применить (dry-run прошёл)' : 'Сначала Dry-run, потом Применить';
-    applyBtn.addEventListener('click', () => run(false));
+    applyBtn.disabled = !!s.busy;
+    applyBtn.title = ready
+      ? 'Dry-run прошёл на этих параметрах — импорт пройдёт так же'
+      : 'Dry-run на текущих параметрах не проходил: план не проверен';
+    applyBtn.addEventListener('click', () => {
+      if (ready) {
+        run(false);
+        return;
+      }
+      confirmApplyWithoutDryRun({
+        text: 'Dry-run на текущих параметрах не проходил — доступность страниц по origin_url и очистка HTML не проверены.',
+        warning: s.force
+          ? '⚠ force включён: страницы будут перекачаны и перезаписаны даже для уже загруженных документов.'
+          : null,
+        onConfirm: () => run(false),
+      });
+    });
 
     wrap.append(dryBtn, applyBtn);
     return wrap;

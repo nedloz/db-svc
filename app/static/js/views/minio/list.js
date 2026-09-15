@@ -1,10 +1,17 @@
 // Список объектов bucket с фильтрами и действиями (download / delete).
-// Бэк отдаёт максимум 200 объектов; для пагинации поверх 200 нужен P-008
-// (не блокирует, но в UI висит warning).
 //
-// Search — клиентский подстроковый по key, prefix — серверный (re-fetch).
-// Download использует presigned URL; на 403 (истекла подпись) делаем new presign
-// прозрачно (см. openObject) — пользователь не видит обновления URL.
+// Список свёрнут по умолчанию и раскрывается по клику: в bucket'е лежат все файлы всех
+// документов, и развёрнутой таблицей он занимал всю страницу, вытесняя загрузку и импорт.
+// В раскрытом виде показывается одна страница с ограничением по высоте.
+//
+// Пагинация курсорная, как её отдаёт MinIO: continuation_token ведёт только вперёд,
+// прыгнуть на произвольную страницу нельзя. Назад возвращаемся по стеку уже пройденных
+// токенов (tokenStack). Раньше фронт брал ровно одну страницу в 200 объектов и показывал
+// предупреждение, что дальше не видно, хотя бэк умел отдавать продолжение.
+//
+// Search — клиентский подстроковый по key в пределах текущей страницы, prefix — серверный
+// (re-fetch с первой страницы). Download использует presigned URL; на 403 (истекла подпись)
+// делаем new presign прозрачно (см. openObject).
 
 import { createStore } from '../../state/store.js';
 import { createInput } from '../../components/form-controls.js';
@@ -20,6 +27,7 @@ import {
 } from '../../api/minio.js';
 
 const PREFIX_DEBOUNCE_MS = 250;
+const PAGE_SIZES = [10, 25, 50, 100];
 
 export function mountMinioList(container) {
   // Возвращает { unmount, refresh } — index.js дёргает refresh после upload'ов.
@@ -31,6 +39,12 @@ export function mountMinioList(container) {
     selected: new Set(),
     loading: false,
     error: null,
+    expanded: false,
+    pageSize: 25,
+    pageIndex: 1,
+    tokenStack: [],      // токены предыдущих страниц, для кнопки «Назад»
+    currentToken: null,
+    nextToken: null,
   });
 
   const root = document.createElement('div');
@@ -39,20 +53,65 @@ export function mountMinioList(container) {
 
   let prefixTimer = null;
   const unsubscribe = store.subscribe(render);
-  load();
+  loadPage(null);
   render();
   return {
     unmount: () => { if (prefixTimer) clearTimeout(prefixTimer); unsubscribe(); },
-    refresh: load,
+    // index.js зовёт это после загрузки и импорта — раскрываем список, иначе результат
+    // операции оказывается спрятан за свёрнутым блоком.
+    refresh: () => { store.set({ expanded: true }); return reload(); },
   };
 
   function render() {
     const s = store.get();
     root.replaceChildren();
-    root.append(buildToolbar(s));
-    if (s.error) { root.append(createErrorView(s.error)); return; }
-    if (s.loading && !s.items.length) { root.append(createLoader({ label: 'Загружаю объекты…' })); return; }
-    root.append(buildList(s));
+    root.append(buildDisclosure(s));
+  }
+
+  // ----- разметка -----
+
+  function buildDisclosure(s) {
+    const details = document.createElement('details');
+    details.className = 'minio-list__disclosure';
+    details.open = s.expanded;
+    details.addEventListener('toggle', () => {
+      if (details.open !== store.get().expanded) store.set({ expanded: details.open });
+    });
+
+    const summary = document.createElement('summary');
+    summary.className = 'minio-list__summary';
+
+    const title = document.createElement('span');
+    title.className = 'minio-list__summary-title';
+    title.textContent = 'Объекты bucket';
+    summary.append(title);
+
+    const meta = document.createElement('span');
+    meta.className = 'minio-list__summary-meta';
+    meta.textContent = s.loading
+      ? 'загрузка…'
+      : `${s.bucket || '—'} · стр. ${s.pageIndex} · на странице: ${s.items.length}`;
+    summary.append(meta);
+
+    if (s.selected.size) {
+      const chosen = document.createElement('span');
+      chosen.className = 'minio-list__summary-selected';
+      chosen.textContent = `выбрано: ${s.selected.size}`;
+      summary.append(chosen);
+    }
+
+    details.append(summary);
+
+    const body = document.createElement('div');
+    body.className = 'minio-list__body';
+    body.append(buildToolbar(s));
+    if (s.error) body.append(createErrorView(s.error));
+    else if (s.loading && !s.items.length) body.append(createLoader({ label: 'Загружаю объекты…' }));
+    else body.append(buildList(s));
+    body.append(buildPager(s));
+    details.append(body);
+
+    return details;
   }
 
   function buildToolbar(s) {
@@ -63,16 +122,17 @@ export function mountMinioList(container) {
       value: s.prefix,
       placeholder: 'Префикс (серверный фильтр)',
       onInput: (val) => {
-        store.set({ prefix: val });
+        // Смена префикса — это другой набор объектов: сбрасываем и страницы, и выбор.
+        store.set({ prefix: val, selected: new Set() });
         if (prefixTimer) clearTimeout(prefixTimer);
-        prefixTimer = setTimeout(load, PREFIX_DEBOUNCE_MS);
+        prefixTimer = setTimeout(() => resetToFirstPage(), PREFIX_DEBOUNCE_MS);
       },
     });
     prefixInput.classList.add('minio-list__prefix');
 
     const searchInput = createInput({
       value: s.search,
-      placeholder: 'Поиск по key (клиентский)',
+      placeholder: 'Поиск по key (в пределах страницы)',
       onInput: (val) => store.set({ search: val }),
     });
     searchInput.classList.add('minio-list__search');
@@ -82,7 +142,7 @@ export function mountMinioList(container) {
     refreshBtn.className = 'btn minio-list__refresh';
     refreshBtn.textContent = '↻ Обновить';
     refreshBtn.disabled = s.loading;
-    refreshBtn.addEventListener('click', load);
+    refreshBtn.addEventListener('click', () => reload());
 
     const bulkBtn = document.createElement('button');
     bulkBtn.type = 'button';
@@ -95,6 +155,59 @@ export function mountMinioList(container) {
     return bar;
   }
 
+  function buildPager(s) {
+    const bar = document.createElement('div');
+    bar.className = 'minio-list__pager';
+
+    const prev = document.createElement('button');
+    prev.type = 'button';
+    prev.className = 'btn';
+    prev.textContent = '← Назад';
+    prev.disabled = s.loading || !s.tokenStack.length;
+    prev.addEventListener('click', goPrev);
+
+    const info = document.createElement('span');
+    info.className = 'minio-list__pager-info';
+    info.textContent = `Стр. ${s.pageIndex}`;
+
+    const next = document.createElement('button');
+    next.type = 'button';
+    next.className = 'btn';
+    next.textContent = 'Вперёд →';
+    next.disabled = s.loading || !s.nextToken;
+    next.addEventListener('click', goNext);
+
+    const sizeLabel = document.createElement('span');
+    sizeLabel.className = 'minio-list__pager-label';
+    sizeLabel.textContent = '· на странице:';
+
+    const sizeSelect = document.createElement('select');
+    sizeSelect.className = 'select minio-list__pager-size';
+    for (const size of PAGE_SIZES) {
+      const option = document.createElement('option');
+      option.value = String(size);
+      option.textContent = String(size);
+      sizeSelect.append(option);
+    }
+    sizeSelect.value = String(s.pageSize);
+    sizeSelect.disabled = s.loading;
+    // Размер страницы меняет нарезку курсором — начинаем заново с первой.
+    sizeSelect.addEventListener('change', () => {
+      store.set({ pageSize: Number(sizeSelect.value) });
+      resetToFirstPage();
+    });
+
+    bar.append(prev, info, next, sizeLabel, sizeSelect);
+
+    if (!s.nextToken && s.pageIndex === 1 && !s.loading) {
+      const all = document.createElement('span');
+      all.className = 'minio-list__pager-note';
+      all.textContent = '· это все объекты';
+      bar.append(all);
+    }
+    return bar;
+  }
+
   function buildList(s) {
     const visible = s.search
       ? s.items.filter((it) => it.key.toLowerCase().includes(s.search.toLowerCase()))
@@ -103,21 +216,18 @@ export function mountMinioList(container) {
     const wrap = document.createElement('div');
     wrap.className = 'minio-list__list';
 
-    const summary = document.createElement('div');
-    summary.className = 'minio-list__summary';
-    let summaryText = `Bucket: ${s.bucket || '—'} · показано: ${visible.length} из ${s.items.length}`;
-    // TODO(backend): P-009 — pagination via continuation_token (бэк хардкодит MaxKeys=200).
-    if (s.items.length >= 200) summaryText += ' · лимит API (200) — уточните prefix, чтобы увидеть больше';
-    summary.textContent = summaryText;
-    wrap.append(summary);
-
     if (!visible.length) {
       wrap.append(createEmptyState({
         title: 'Объектов нет',
-        description: s.search ? 'Под текущий поиск ничего не подходит на текущей странице.' : 'Bucket пуст или prefix ничего не сматчил.',
+        description: s.search
+          ? 'Под текущий поиск ничего не подходит на этой странице — поиск работает только по загруженной странице.'
+          : 'Bucket пуст или prefix ничего не сматчил.',
       }));
       return wrap;
     }
+
+    const scroller = document.createElement('div');
+    scroller.className = 'minio-list__scroller';
 
     const table = document.createElement('table');
     table.className = 'minio-list__table';
@@ -133,6 +243,7 @@ export function mountMinioList(container) {
     const someChecked = !allChecked && visibleKeys.some((k) => s.selected.has(k));
     headCb.checked = allChecked;
     headCb.indeterminate = someChecked;
+    headCb.title = 'Выбрать всё на этой странице';
     headCb.addEventListener('change', () => {
       const next = new Set(s.selected);
       if (headCb.checked) for (const k of visibleKeys) next.add(k);
@@ -150,7 +261,15 @@ export function mountMinioList(container) {
     const tbody = document.createElement('tbody');
     for (const item of visible) tbody.append(buildRow(item, s.selected));
     table.append(tbody);
-    wrap.append(table);
+    scroller.append(table);
+    wrap.append(scroller);
+
+    if (s.search && visible.length !== s.items.length) {
+      const note = document.createElement('div');
+      note.className = 'minio-list__note';
+      note.textContent = `Показано ${visible.length} из ${s.items.length} на этой странице. Поиск не уходит на другие страницы — сузьте префикс.`;
+      wrap.append(note);
+    }
     return wrap;
   }
 
@@ -202,17 +321,51 @@ export function mountMinioList(container) {
     return tr;
   }
 
+  // ----- пагинация -----
+
+  function resetToFirstPage() {
+    store.set({ tokenStack: [], currentToken: null, pageIndex: 1 });
+    loadPage(null);
+  }
+
+  function reload() {
+    // Перечитываем текущую страницу тем же токеном, не сбивая позицию.
+    return loadPage(store.get().currentToken);
+  }
+
+  function goNext() {
+    const s = store.get();
+    if (!s.nextToken) return;
+    store.set({
+      tokenStack: [...s.tokenStack, s.currentToken],
+      pageIndex: s.pageIndex + 1,
+    });
+    loadPage(s.nextToken);
+  }
+
+  function goPrev() {
+    const s = store.get();
+    if (!s.tokenStack.length) return;
+    const stack = [...s.tokenStack];
+    const token = stack.pop();
+    store.set({ tokenStack: stack, pageIndex: Math.max(1, s.pageIndex - 1) });
+    loadPage(token);
+  }
+
   // ----- data ops -----
 
-  async function load() {
-    const { prefix } = store.get();
+  async function loadPage(token) {
+    const { prefix, pageSize } = store.get();
     store.set({ loading: true, error: null });
     try {
-      const { bucket, items } = await listObjects(prefix, { trackAs: 'MinIO: объекты' });
-      // Чистим selected от уже несуществующих ключей.
-      const presentKeys = new Set(items.map((i) => i.key));
-      const selected = new Set([...store.get().selected].filter((k) => presentKeys.has(k)));
-      store.set({ bucket, items, selected, loading: false });
+      const { bucket, items, nextToken } = await listObjects(prefix, {
+        maxKeys: pageSize,
+        continuationToken: token,
+        trackAs: 'MinIO: объекты',
+      });
+      // selected намеренно не чистим по загруженной странице: выбор живёт между
+      // страницами, а удаление несуществующего ключа MinIO принимает молча.
+      store.set({ bucket, items, nextToken, currentToken: token, loading: false });
     } catch (err) {
       store.set({ loading: false, error: err });
     }
@@ -239,7 +392,7 @@ export function mountMinioList(container) {
       toast.success('Объект удалён');
       const next = new Set(store.get().selected); next.delete(key);
       store.set({ selected: next });
-      await load();
+      await reload();
     } catch (err) {
       toast.error(`Не удалось удалить: ${err?.message || err}`);
     }
@@ -264,7 +417,7 @@ export function mountMinioList(container) {
     }
     toast[failed ? 'warn' : 'success'](`Удалено: ${keys.length - failed}${failed ? `, ошибок: ${failed}` : ''}`);
     store.set({ selected: new Set() });
-    await load();
+    await reload();
   }
 }
 

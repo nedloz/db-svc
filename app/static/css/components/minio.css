@@ -35,9 +35,82 @@
   min-width: 180px;
 }
 
+/* ---------- раскрывающийся список объектов ---------- */
+
+.minio-list__disclosure {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+}
+
 .minio-list__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  padding: var(--sp-3) var(--sp-4);
+  cursor: pointer;
+  user-select: none;
   font-size: var(--fs-sm);
   color: var(--text-muted);
+}
+
+.minio-list__summary:hover {
+  background: rgba(255, 255, 255, 0.025);
+  border-radius: var(--r-md);
+}
+
+.minio-list__summary-title {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+}
+
+.minio-list__summary-selected {
+  padding: 1px 8px;
+  border-radius: var(--r-pill);
+  background: rgba(148, 178, 240, 0.15);
+  color: var(--accent-edit);
+}
+
+.minio-list__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4) var(--sp-4);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--sp-4);
+}
+
+/* Высота страницы ограничена: раскрытый список не должен вытеснять всё остальное. */
+.minio-list__scroller {
+  max-height: 420px;
+  overflow-y: auto;
+  border-radius: var(--r-md);
+}
+
+.minio-list__scroller thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.minio-list__pager {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.minio-list__pager-size {
+  width: auto;
+}
+
+.minio-list__note {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
 }
 
 .minio-list__table {
