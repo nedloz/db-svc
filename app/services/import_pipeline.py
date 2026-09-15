@@ -8,6 +8,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+import psycopg
+from psycopg import Rollback
 from psycopg.types.json import Json
 
 from app.services.pg import get_conn
@@ -42,6 +44,9 @@ class ImportReport:
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     inserted: dict[str, int] = field(default_factory=dict)
+    # Счётчики dry-run: строки реально прошли INSERT в откаченной транзакции, но в базе их
+    # нет. Отдельно от `inserted`, чтобы отчёт не утверждал, что что-то записано.
+    would_insert: dict[str, int] = field(default_factory=dict)
     logs: list[str] = field(default_factory=list)
 
     def warn(self, msg: str) -> None:
@@ -64,6 +69,7 @@ class ImportReport:
             "counts_read": self.counts_read,
             "counts_prepared": self.counts_prepared,
             "inserted": self.inserted,
+            "would_insert": self.would_insert,
             "warnings": self.warnings,
             "errors": self.errors,
             "logs": self.logs,
@@ -372,6 +378,97 @@ DELETE_SQL = [
 ]
 
 
+# На битом CSV непроходных строк могут быть тысячи, и почти всегда это одна и та же ошибка.
+# В отчёт попадают первые, остальные сворачиваются в одну строку с количеством.
+DRY_RUN_ROW_ERROR_LIMIT = 20
+
+
+def _describe_db_error(exc: Exception) -> str:
+    """Сообщение psycopg + поля из diag: по ним видно, какая колонка и какое ограничение
+    не прошли, а не только «insert failed»."""
+    diag = getattr(exc, "diag", None)
+    hints = []
+    column = getattr(diag, "column_name", None) if diag else None
+    constraint = getattr(diag, "constraint_name", None) if diag else None
+    sqlstate = getattr(exc, "sqlstate", None)
+    if column:
+        hints.append(f"колонка {column}")
+    if constraint:
+        hints.append(f"ограничение {constraint}")
+    if sqlstate:
+        hints.append(f"SQLSTATE {sqlstate}")
+    detail = " ".join(str(exc).split())
+    return f"{detail} ({', '.join(hints)})" if hints else detail
+
+
+def _diagnose_failed_table(conn, cur, name: str, vals: list[tuple[Any, ...]], report: ImportReport, batch_exc: Exception) -> None:
+    """Пакетная вставка упала — повторяем её построчно, каждую строку в своём савепойнте,
+    чтобы назвать номера конкретных проблемных строк. Пакетом ошибка сообщает только имя
+    таблицы, а в датасете на сотни строк этого мало."""
+    failed = 0
+    for i, val in enumerate(vals, 1):
+        try:
+            with conn.transaction():
+                cur.execute(SQL[name], val)
+        except psycopg.Error as exc:
+            failed += 1
+            if failed <= DRY_RUN_ROW_ERROR_LIMIT:
+                report.error(f"{name}: строка {i} — {_describe_db_error(exc)}")
+
+    if failed == 0:
+        # Построчно всё прошло, значит дело не в отдельной строке (например, ограничение
+        # проверяется на всём пакете). Отдаём исходную ошибку как есть.
+        report.error(f"{name}: {_describe_db_error(batch_exc)}")
+    elif failed > DRY_RUN_ROW_ERROR_LIMIT:
+        report.error(
+            f"{name}: ещё {failed - DRY_RUN_ROW_ERROR_LIMIT} строк с ошибками "
+            f"(показаны первые {DRY_RUN_ROW_ERROR_LIMIT})"
+        )
+
+
+def _execute_plan(conn, rows: dict[str, list[tuple[Any, ...]]], order: list[str], report: ImportReport, replace_mode: bool, cancel_check, advance, *, diagnose: bool) -> None:
+    """Общее тело импорта для обоих режимов: очистка при replace_mode и вставки по порядку
+    зависимостей. При diagnose=True (dry-run) ошибка БД не поднимается наверх, а разбирается
+    в отчёт — иначе dry-run возвращал бы 500 вместо списка проблем."""
+    with conn.cursor() as cur:
+        if replace_mode:
+            report.info("Очистка целевых таблиц")
+            for stmt in DELETE_SQL:
+                if cancel_check is not None and cancel_check():
+                    raise RuntimeError("Job cancelled")
+                cur.execute(stmt)
+            advance("truncate", "Таблицы очищены")
+
+        for name in order:
+            if cancel_check is not None and cancel_check():
+                raise RuntimeError("Job cancelled")
+            vals = rows[name]
+            if not vals:
+                advance(f"insert:{name}", f"Пропуск {name}: нет строк")
+                continue
+
+            if not diagnose:
+                cur.executemany(SQL[name], vals)
+                report.inserted[name] = len(vals)
+                report.info(f"Вставлено в {name}: {len(vals)}")
+                advance(f"insert:{name}", f"Вставлено в {name}: {len(vals)}")
+                continue
+
+            try:
+                # Савепойнт вокруг пакета: если таблица проходит целиком (обычный случай),
+                # построчно её перебирать незачем.
+                with conn.transaction():
+                    cur.executemany(SQL[name], vals)
+            except psycopg.Error as exc:
+                _diagnose_failed_table(conn, cur, name, vals, report, exc)
+                report.error(f"{name}: план не проходит, следующие таблицы не проверялись")
+                return
+
+            report.would_insert[name] = len(vals)
+            report.info(f"Проверено {name}: {len(vals)} строк пройдут вставку")
+            advance(f"insert:{name}", f"Проверено {name}: {len(vals)}")
+
+
 def run_dataset_import(files: dict[str, tuple[str, bytes]], dry_run: bool = False, replace_mode: bool = False, progress_cb=None, cancel_check=None) -> dict[str, Any]:
     report = ImportReport(dry_run=dry_run)
     order = ["universities", "campuses", "faculties", "buildings", "programs", "topics", "documents", "document_relations"]
@@ -399,30 +496,33 @@ def run_dataset_import(files: dict[str, tuple[str, bytes]], dry_run: bool = Fals
         return report.as_dict()
 
     if dry_run:
-        report.info("Dry-run: вставка в БД не выполнялась")
+        # Выполняем ровно тот же план, что и настоящий импорт (включая очистку при
+        # replace_mode), и откатываем транзакцию. До этого dry-run обрывался здесь же,
+        # не открывая соединения, и проверял только разбор CSV и ссылки между файлами —
+        # то есть молчал про NOT NULL, CHECK, UNIQUE, приведение типов (`indexed_at` едет
+        # в TIMESTAMPTZ строкой) и конфликты с уже лежащими в базе строками. Успешный
+        # dry-run при этом ничего не гарантировал.
+        #
+        # Откат задаётся явно: psycopg закрывает `with connect(...)` КОММИТОМ, поэтому
+        # «просто не вызывать commit()» означало бы записать данные.
+        #
+        # Побочный эффект: при replace_mode проверка держит блокировки на очищаемых
+        # таблицах до отката. Таблицы датасета небольшие, это секунды.
+        with get_conn() as conn:
+            with conn.transaction():
+                _execute_plan(conn, rows, order, report, replace_mode, cancel_check, advance, diagnose=True)
+                raise Rollback
+            # Подстраховка на случай, если транзакция почему-то осталась открытой: цена
+            # ошибки здесь — молча выполненный импорт (а при replace_mode ещё и очистка
+            # таблиц до него). На уже закрытой транзакции это no-op.
+            conn.rollback()
+
+        report.info("Dry-run: транзакция откачена, база не изменена")
         advance("dry_run", "Dry-run завершён")
         return report.as_dict()
 
     with get_conn() as conn:
-        with conn.cursor() as cur:
-            if replace_mode:
-                report.info("Очистка целевых таблиц")
-                for stmt in DELETE_SQL:
-                    if cancel_check is not None and cancel_check():
-                        raise RuntimeError("Job cancelled")
-                    cur.execute(stmt)
-                advance("truncate", "Таблицы очищены")
-            for name in order:
-                if cancel_check is not None and cancel_check():
-                    raise RuntimeError("Job cancelled")
-                vals = rows[name]
-                if not vals:
-                    advance(f"insert:{name}", f"Пропуск {name}: нет строк")
-                    continue
-                cur.executemany(SQL[name], vals)
-                report.inserted[name] = len(vals)
-                report.info(f"Вставлено в {name}: {len(vals)}")
-                advance(f"insert:{name}", f"Вставлено в {name}: {len(vals)}")
+        _execute_plan(conn, rows, order, report, replace_mode, cancel_check, advance, diagnose=False)
         conn.commit()
 
     report.info("Импорт завершён")
@@ -439,5 +539,7 @@ def dataset_status() -> dict[str, Any]:
             "scope_json сохраняет значение 'all' без замены",
             "created_by и checksum в documents выставляются в NULL",
             "created_at и updated_at остаются на default БД",
+            "dry_run выполняет весь план в транзакции и откатывает её: проверяются и ограничения БД, и конфликты с текущими данными",
+            "счётчики dry_run приходят в would_insert, inserted остаётся пустым",
         ],
     }

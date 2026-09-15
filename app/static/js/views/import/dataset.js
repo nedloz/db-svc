@@ -4,13 +4,15 @@
 // UX:
 //  1) поля файлов генерируются из DATASET_FIELDS — один массив, добавление
 //     нового поля = одна строчка (плюс правка бэка);
-//  2) сначала «Dry-run» — бэк валидирует и подготавливает строки без INSERT;
-//  3) «Применить» disabled до тех пор, пока последний dry-run не вернул ok=true
-//     (и не были изменены файлы / флаги после этого);
+//  2) сначала «Dry-run» — бэк прогоняет весь импорт в транзакции и откатывает её,
+//     поэтому проверяются и ограничения БД, и конфликты с текущими данными;
+//  3) «Применить» доступно всегда; если dry-run на текущих файлах не проходил —
+//     спрашиваем подтверждение, потому что план не проверен;
 //  4) отчёт — табы по уровням errors / warnings / info / inserts.
 
 import { createStore } from '../../state/store.js';
 import { createErrorView } from '../../components/error-view.js';
+import { confirmApplyWithoutDryRun } from '../../components/confirm-no-dry-run.js';
 import { createFilePicker } from '../../components/form-controls.js';
 import { toast } from '../../components/toast.js';
 import { importDataset } from '../../api/db.js';
@@ -278,11 +280,23 @@ export function mountDatasetImport(container) {
     applyBtn.className = 'btn btn--primary dataset-import__apply';
     applyBtn.textContent = s.busy === 'apply' ? 'Импорт идёт…' : 'Применить';
     const applyReady = s.lastDryRun && s.lastDryRun.signature === currentSignature();
-    applyBtn.disabled = !!s.busy || !applyReady;
+    applyBtn.disabled = !!s.busy;
     applyBtn.title = applyReady
-      ? 'Применить импорт (dry-run прошёл, файлы не менялись)'
-      : 'Сначала Dry-run; если файлы / флаги изменятся — Dry-run придётся повторить';
-    applyBtn.addEventListener('click', () => run(false));
+      ? 'Dry-run прошёл на этих файлах — импорт пройдёт так же'
+      : 'Dry-run на текущих файлах не проходил: план не проверен';
+    applyBtn.addEventListener('click', () => {
+      if (applyReady) {
+        run(false);
+        return;
+      }
+      confirmApplyWithoutDryRun({
+        text: 'Dry-run на текущих файлах не проходил — ограничения БД и конфликты с существующими данными не проверены.',
+        warning: s.replaceMode
+          ? '⚠ replace_mode включён: целевые таблицы будут очищены перед вставкой. При падении импорта транзакция откатится целиком, включая очистку.'
+          : null,
+        onConfirm: () => run(false),
+      });
+    });
 
     wrap.append(dryBtn, applyBtn);
 
@@ -304,14 +318,16 @@ export function mountDatasetImport(container) {
     const verdict = report.ok
       ? (reportKind === 'dry-run' ? '✓ Dry-run прошёл успешно' : '✓ Импорт применён')
       : (reportKind === 'dry-run' ? '✗ Dry-run нашёл ошибки' : '✗ Импорт упал');
-    head.textContent = `${verdict} · dry_run=${report.dry_run}`;
+    head.textContent = reportKind === 'dry-run'
+      ? `${verdict} · прогон в транзакции с откатом, база не изменена`
+      : verdict;
     wrap.append(head);
 
     const counts = {
       errors: (report.errors || []).length,
       warnings: (report.warnings || []).length,
       info: Object.keys(report.counts_read || {}).length + (report.logs?.filter(isPlainLog).length || 0),
-      inserts: Object.keys(report.inserted || {}).length,
+      inserts: Object.keys(insertCounts(report)).length,
     };
 
     const tabs = document.createElement('div');
@@ -336,6 +352,12 @@ export function mountDatasetImport(container) {
 
 // ===== helpers =====
 
+// В dry-run строки реально проходят INSERT, но в откаченной транзакции — бэк считает их
+// отдельно в would_insert, чтобы отчёт не утверждал, что данные записаны.
+function insertCounts(report) {
+  return (report?.dry_run ? report?.would_insert : report?.inserted) || {};
+}
+
 function tabLabel(t) {
   switch (t) {
     case 'errors':   return 'Errors';
@@ -349,7 +371,7 @@ function tabLabel(t) {
 function pickInitialTab(report) {
   if ((report?.errors || []).length) return 'errors';
   if ((report?.warnings || []).length) return 'warnings';
-  if (Object.keys(report?.inserted || {}).length) return 'inserts';
+  if (Object.keys(insertCounts(report)).length) return 'inserts';
   return 'info';
 }
 
@@ -424,13 +446,13 @@ function renderTab(tab, report) {
   }
 
   if (tab === 'inserts') {
-    const ins = report.inserted || {};
+    const ins = insertCounts(report);
     const keys = Object.keys(ins);
     if (!keys.length) {
       const empty = document.createElement('div');
       empty.className = 'empty-state';
       empty.textContent = report.dry_run
-        ? 'В dry-run строки не вставляются. Переключитесь на «Применить», чтобы получить реальные счётчики.'
+        ? 'Dry-run не дошёл до вставки — смотрите вкладку Errors.'
         : 'Ничего не вставлено.';
       wrap.append(empty);
       return wrap;
@@ -438,14 +460,16 @@ function renderTab(tab, report) {
     const total = keys.reduce((a, k) => a + (ins[k] || 0), 0);
     const head = document.createElement('div');
     head.className = 'dataset-import__inserts-total';
-    head.textContent = `Всего вставлено: ${total}`;
+    head.textContent = report.dry_run
+      ? `Пройдёт вставку: ${total} (проверено в транзакции, база не изменена)`
+      : `Всего вставлено: ${total}`;
     wrap.append(head);
 
     const t = document.createElement('table');
     t.className = 'dataset-import__inserts';
     const thead = document.createElement('thead');
     const hr = document.createElement('tr');
-    for (const h of ['field', 'вставлено']) {
+    for (const h of ['field', report.dry_run ? 'пройдёт' : 'вставлено']) {
       const th = document.createElement('th'); th.textContent = h; hr.append(th);
     }
     thead.append(hr); t.append(thead);

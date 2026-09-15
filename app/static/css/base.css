@@ -2,6 +2,11 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
+/* Атрибут hidden должен побеждать display из классов. Без этого элемент, спрятанный через
+   el.hidden = true, остаётся виден, если его класс задаёт display (баннер склейки в графе
+   так и висел пустой рамкой). В панели так прячут элементы в полутора десятках мест. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;

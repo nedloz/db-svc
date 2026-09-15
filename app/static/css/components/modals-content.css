@@ -129,7 +129,8 @@
   font-size: var(--fs-sm);
 }
 
-.cascade-modal__warning {
+.cascade-modal__warning,
+.confirm-no-dry-run__warning {
   padding: var(--sp-3);
   background: rgba(255, 204, 0, 0.08);
   border: 1px solid var(--accent-yellow);
