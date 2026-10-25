@@ -1,7 +1,9 @@
-// Импорт файлов в MinIO с привязкой к library.documents по title.
+// Импорт файлов и zip-архивов в MinIO с привязкой к library.documents.
 // POST /api/minio/import/files (multipart). Бэк возвращает stats + per-file
-// results с разными статусами (imported / dry_run / unmatched / type_mismatch /
-// upload_failed / db_failed / skipped_unsupported).
+// results с разными статусами (imported / dry_run / unmatched / ambiguous_title /
+// type_mismatch / upload_failed / db_failed / skipped_unsupported / skipped_too_large /
+// duplicate_in_batch / archive_failed). Архив бэк раскрывает сам: папки внутри не важны,
+// а если в нём есть manifest.json, документы сопоставляются по document_id.
 //
 // UX как у M8: «Dry-run» и «Применить» доступны независимо; если dry-run на текущем
 // наборе файлов не проходил, «Применить» переспрашивает. Отчёт — табы.
@@ -18,9 +20,13 @@ const STATUS_LEVEL = {
   dry_run:             'success',
   unmatched:           'warning',
   type_mismatch:       'warning',
+  ambiguous_title:     'warning',
+  duplicate_in_batch:  'warning',
   skipped_unsupported: 'warning',
+  skipped_too_large:   'warning',
   upload_failed:       'error',
   db_failed:           'error',
+  archive_failed:      'error',
 };
 const TABS = ['success', 'warning', 'error', 'stats'];
 
@@ -60,7 +66,7 @@ export function mountMinioImportFiles(container, { onImported } = {}) {
     wrap.className = 'minio-import-files__plan';
     const head = document.createElement('div');
     head.className = 'minio-import-files__plan-head';
-    head.textContent = 'План импорта: фронт пошлёт файлы как есть; бэк сам сматчит filename (без расширения) ↔ library.documents.title и проверит content_type.';
+    head.textContent = 'План импорта: фронт пошлёт файлы как есть. Zip-архив бэк раскроет сам (структура папок не важна): при наличии manifest.json документы сопоставляются по document_id, иначе имя файла (без расширения) ↔ library.documents.title с проверкой content_type.';
     wrap.append(head);
     if (s.plan && typeof s.plan === 'object') {
       const pre = document.createElement('pre');
@@ -83,10 +89,11 @@ export function mountMinioImportFiles(container, { onImported } = {}) {
 
     const lbl = document.createElement('div');
     lbl.className = 'minio-import-files__field';
-    const cap = document.createElement('span'); cap.textContent = 'Файлы для импорта: ';
+    const cap = document.createElement('span'); cap.textContent = 'Файлы или .zip-архивы для импорта: ';
     const picker = createFilePicker({
       multiple: true,
-      label: 'Выберите файлы',
+      label: 'Выберите файлы или архив',
+      accept: '.zip,.pdf,.docx,.html,.htm,.txt',
       onChange: (files) => {
         store.set({ files: files || [], lastDryRun: null, report: null, error: null });
       },
@@ -306,7 +313,7 @@ function renderResults(items) {
     li.className = `minio-import-files__result minio-import-files__result--${r.status}`;
     const head = document.createElement('div');
     head.className = 'minio-import-files__result-head';
-    head.textContent = `${r.filename || '<no-file>'} · ${r.status}`;
+    head.textContent = `${r.path || r.filename || '<no-file>'} · ${r.status}`;
     li.append(head);
     if (r.message) {
       const msg = document.createElement('div');

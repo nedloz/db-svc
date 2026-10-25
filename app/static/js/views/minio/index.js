@@ -30,7 +30,7 @@ export const minioView = {
     );
     const impFilesCard = buildCard(
       'Импорт файлов в documents',
-      'Матч по имени файла (без расширения) ↔ library.documents.title. Сначала dry-run.',
+      'Файлы или .zip-архив (папки внутри не важны). С manifest.json матч по document_id, без него — по имени файла ↔ library.documents.title. Сначала dry-run.',
     );
     const impHtmlCard = buildCard(
       'Импорт HTML из origin_url',

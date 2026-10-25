@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import mimetypes
 import os
 import re
 import tempfile
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
-from typing import Any
+from typing import Any, BinaryIO, Callable
 
 import boto3
 from botocore.config import Config
@@ -20,19 +22,30 @@ from fastapi import UploadFile
 from app.services.pg import get_conn
 from app.services.html_processor import clean_html_for_rag
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".html", ".htm"}
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".html", ".htm", ".txt"}
+ARCHIVE_EXTENSION = ".zip"
 CONTENT_TYPE_BY_EXT = {
     ".pdf": "pdf",
     ".docx": "docx",
     ".html": "html",
     ".htm": "html",
+    ".txt": "txt",
 }
 MIME_BY_EXT = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".html": "text/html",
     ".htm": "text/html",
+    ".txt": "text/plain; charset=utf-8",
 }
+
+# Лимиты на архив. Распаковка идёт во временные файлы, а размер в заголовке zip можно
+# подделать, поэтому лимит проверяется и по заголовку, и по фактически прочитанным байтам.
+ZIP_MAX_MEMBERS = int(os.getenv("IMPORT_ZIP_MAX_FILES", "1000"))
+ZIP_MAX_TOTAL_BYTES = int(float(os.getenv("IMPORT_ZIP_MAX_TOTAL_MB", "2048")) * 1024 * 1024)
+ZIP_MAX_MEMBER_BYTES = int(float(os.getenv("IMPORT_ZIP_MAX_FILE_MB", "200")) * 1024 * 1024)
+ZIP_MANIFEST_MAX_BYTES = 20 * 1024 * 1024
+ZIP_MANIFEST_NAME = "manifest.json"
 
 
 @dataclass
@@ -159,18 +172,49 @@ def _load_documents_map() -> tuple[dict[str, dict[str, Any]], list[str]]:
     return docs_by_title, duplicates
 
 
+def _load_documents_by_id() -> dict[str, dict[str, Any]]:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, title, content_type, COALESCE(content_version, 1), status, checksum
+                FROM library.documents
+                """
+            )
+            rows = cur.fetchall()
+    return {
+        str(r[0]): {
+            "id": r[0],
+            "title": r[1],
+            "content_type": (r[2] or "").strip().lower() if r[2] else None,
+            "content_version": int(r[3] or 1),
+            "status": r[4],
+            "checksum": r[5],
+        }
+        for r in rows
+    }
+
+
 def get_minio_import_plan() -> dict[str, Any]:
     docs_by_title, duplicates = _load_documents_map()
     return {
         "ok": True,
         "implemented": True,
-        "match_strategy": "documents.title == filename_without_extension",
+        "match_strategy": "document_id из manifest.json архива, иначе documents.title == filename_without_extension",
+        "archives": {
+            "extension": ARCHIVE_EXTENSION,
+            "manifest": ZIP_MANIFEST_NAME,
+            "max_files": ZIP_MAX_MEMBERS,
+            "max_total_mb": round(ZIP_MAX_TOTAL_BYTES / 1024 / 1024),
+            "max_file_mb": round(ZIP_MAX_MEMBER_BYTES / 1024 / 1024),
+        },
         "allowed_extensions": sorted(ALLOWED_EXTENSIONS),
         "documents_available": len(docs_by_title),
         "duplicate_titles": duplicates,
         "steps": [
+            "распаковать .zip (структура папок внутри не важна) и прочитать manifest.json, если он есть",
             "прочитать загруженные файлы",
-            "сопоставить каждый файл с library.documents по title",
+            "сопоставить каждый файл с library.documents: по document_id из манифеста, иначе по title",
             "проверить content_type по расширению",
             "посчитать sha256 и размер",
             "загрузить файл в MinIO по пути documents/{document_id}/v{content_version}/original/source.{ext}",
@@ -179,7 +223,8 @@ def get_minio_import_plan() -> dict[str, Any]:
         ],
         "notes": [
             "Теперь запись в library.document_files создается даже без уникального индекса на document_id.",
-            "Если title в library.documents не уникален, такие документы не импортируются до исправления дублей.",
+            "Если title в library.documents не уникален, такие файлы без манифеста не импортируются до исправления дублей.",
+            "В манифесте имя файла может быть усечено (имена длиннее 255 байт), поэтому с манифестом сопоставление идёт строго по document_id, а не по имени.",
         ],
     }
 
@@ -564,8 +609,161 @@ def import_remote_html_to_minio(dry_run: bool = False, limit: int | None = None,
     }
 
 
+@dataclass
+class _ImportItem:
+    """Один файл к импорту: загруженный напрямую или член zip-архива."""
+
+    filename: str                      # имя без каталогов, по нему берётся расширение и title
+    path: str                          # путь для отчёта: «архив.zip:папка/файл.docx» либо имя файла
+    archive: str | None                # имя архива, если файл из него
+    document_id: str | None            # из manifest.json архива; None — манифеста нет
+    open_file: Callable[[], BinaryIO]  # ленивое открытие: члены архива распаковываются по одному
+    manifest_title: str | None = None  # полное название из манифеста (имя файла могло быть усечено)
+
+
+def _decode_zip_name(info: zipfile.ZipInfo) -> str:
+    """Имя члена архива с исправленной кодировкой.
+
+    Без флага UTF-8 (0x800) zipfile читает имя как cp437, и кириллица от Windows-архиваторов
+    превращается в мусор. Возвращаем исходные байты и пробуем utf-8, затем cp866 (OEM-кодировка
+    русской Windows).
+    """
+    name = info.filename
+    if info.flag_bits & 0x800:
+        return name
+    try:
+        raw = name.encode("cp437")
+    except UnicodeEncodeError:
+        return name
+    for encoding in ("utf-8", "cp866"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return name
+
+
+def _read_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> BinaryIO:
+    """Распаковывает член архива во временный файл, не давая ему превысить лимит.
+
+    Размер в заголовке zip можно подделать (zip-бомба), поэтому лимит проверяется по
+    фактически прочитанным байтам.
+    """
+    tmp = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+    copied = 0
+    try:
+        with zf.open(info) as src:
+            while True:
+                chunk = src.read(1024 * 1024)
+                if not chunk:
+                    break
+                copied += len(chunk)
+                if copied > ZIP_MAX_MEMBER_BYTES:
+                    raise ValueError(
+                        f"файл в архиве больше {ZIP_MAX_MEMBER_BYTES // 1024 // 1024} МБ после распаковки"
+                    )
+                tmp.write(chunk)
+    except Exception:
+        tmp.close()
+        raise
+    tmp.seek(0)
+    return tmp
+
+
+def _load_manifest(zf: zipfile.ZipFile, members: list[tuple[zipfile.ZipInfo, str]]) -> dict[str, dict[str, str]]:
+    """{имя файла: {"document_id", "title"}} из manifest.json архива (если он есть).
+
+    Формат (schema_version 1): {"documents": [{"file": "...", "document_id": "...", ...}]}.
+    Имя файла в манифесте — это то, под которым файл лежит в архиве, но у длинных названий оно
+    усечено до лимита файловой системы; поэтому с базой файл сопоставляется не по имени, а по
+    document_id и полному title из манифеста. document_id при этом может не найтись: при импорте
+    датасета идентификаторы документов пересоздаются, и у выгрузки из другой базы они другие.
+    """
+    for info, name in members:
+        if Path(name).name.lower() != ZIP_MANIFEST_NAME:
+            continue
+        if info.file_size > ZIP_MANIFEST_MAX_BYTES:
+            raise ValueError("manifest.json слишком большой")
+        data = json.loads(_read_member(zf, info).read().decode("utf-8-sig"))
+        documents = data.get("documents") if isinstance(data, dict) else None
+        if not isinstance(documents, list):
+            raise ValueError("в manifest.json нет списка documents")
+        return {
+            Path(str(d["file"])).name: {"document_id": str(d.get("document_id") or ""), "title": str(d.get("title") or "")}
+            for d in documents
+            if isinstance(d, dict) and d.get("file")
+        }
+    return {}
+
+
+def _expand_upload(upload: UploadFile, stats: dict[str, Any], results: list[dict[str, Any]], opened: list[Any]) -> list[_ImportItem]:
+    """Превращает загруженный файл в список файлов к импорту: zip раскрывается, остальное как есть."""
+    filename = upload.filename or ""
+    if Path(filename).suffix.lower() != ARCHIVE_EXTENSION:
+        return [_ImportItem(Path(filename).name, filename, None, None, lambda f=upload.file: f)]
+
+    stats["archives"] += 1
+    try:
+        upload.file.seek(0)
+        zf = zipfile.ZipFile(upload.file)
+        opened.append(zf)
+        infos = [i for i in zf.infolist() if not i.is_dir()]
+        if len(infos) > ZIP_MAX_MEMBERS:
+            raise ValueError(f"в архиве {len(infos)} файлов, предел — {ZIP_MAX_MEMBERS}")
+        total = sum(i.file_size for i in infos)
+        if total > ZIP_MAX_TOTAL_BYTES:
+            raise ValueError(
+                f"архив распаковывается в {total // 1024 // 1024} МБ, предел — {ZIP_MAX_TOTAL_BYTES // 1024 // 1024} МБ"
+            )
+        members = [(i, _decode_zip_name(i)) for i in infos]
+        manifest = _load_manifest(zf, members)
+    except Exception as exc:
+        stats["archive_failed"] += 1
+        results.append({"filename": filename, "ok": False, "status": "archive_failed", "message": f"Не удалось прочитать архив: {exc}"})
+        return []
+
+    items: list[_ImportItem] = []
+    for info, name in members:
+        base = Path(name).name
+        parts = Path(name).parts
+        # Служебное: манифест, метаданные macOS, скрытые файлы. Не документы и не ошибка.
+        if base.lower() == ZIP_MANIFEST_NAME or "__MACOSX" in parts or base.startswith(".") or base.lower() == "thumbs.db":
+            continue
+        if info.file_size > ZIP_MAX_MEMBER_BYTES:
+            stats["skipped_too_large"] += 1
+            results.append({
+                "filename": base, "path": f"{filename}:{name}", "archive": filename, "ok": False,
+                "status": "skipped_too_large",
+                "message": f"Файл {info.file_size // 1024 // 1024} МБ, предел — {ZIP_MAX_MEMBER_BYTES // 1024 // 1024} МБ",
+            })
+            continue
+        items.append(_ImportItem(
+            filename=base,
+            path=f"{filename}:{name}",
+            archive=filename,
+            document_id=(manifest.get(base) or {}).get("document_id") or None,
+            manifest_title=(manifest.get(base) or {}).get("title") or None,
+            open_file=lambda zf=zf, info=info: _read_member(zf, info),
+        ))
+    return items
+
+
+def _content_type_compatible(expected: str | None, actual: str | None) -> bool:
+    if not expected or expected == actual:
+        return True
+    # HTML-страницы хранятся очищенным текстом (source.txt), так что .txt для html-документа — норма.
+    return expected == "html" and actual == "txt"
+
+
 def import_files_to_minio(files: list[UploadFile], dry_run: bool = False, progress_cb=None, cancel_check=None) -> dict[str, Any]:
+    """Загрузка файлов и zip-архивов в MinIO с привязкой к library.documents.
+
+    Файл сопоставляется с документом по document_id из manifest.json архива, а без манифеста —
+    по title (имя файла без расширения). Папки внутри архива значения не имеют.
+    """
     docs_by_title, duplicates = _load_documents_map()
+    docs_by_id = _load_documents_by_id()
+    duplicate_set = set(duplicates)
     stats = {
         "total_files": 0,
         "success": 0,
@@ -575,172 +773,201 @@ def import_files_to_minio(files: list[UploadFile], dry_run: bool = False, progre
         "upload_failed": 0,
         "db_failed": 0,
         "skipped_unsupported": 0,
+        "skipped_too_large": 0,
+        "duplicate_in_batch": 0,
+        "archives": 0,
+        "archive_failed": 0,
         "dry_run": dry_run,
     }
     results: list[dict[str, Any]] = []
+    opened_archives: list[Any] = []
 
-    if duplicates:
-        return {
-            "ok": False,
-            "message": "Импорт остановлен: в library.documents есть дубли по title.",
-            "stats": stats,
-            "duplicate_titles": duplicates,
-            "results": results,
-        }
+    try:
+        items: list[_ImportItem] = []
+        for upload in files:
+            items.extend(_expand_upload(upload, stats, results, opened_archives))
 
-    client = None
-    bucket = os.getenv("MINIO_BUCKET", "documents")
-    if not dry_run:
-        client = _s3_client()
-        bucket = _ensure_bucket(client)
+        client = None
+        bucket = os.getenv("MINIO_BUCKET", "documents")
+        if not dry_run:
+            client = _s3_client()
+            bucket = _ensure_bucket(client)
 
-    total = max(len(files), 1)
-    for idx, upload in enumerate(files, 1):
-        if progress_cb is not None:
-            progress_cb(idx - 1, total, "upload", f"Processing {idx}/{total}")
-        if cancel_check is not None and cancel_check():
-            raise RuntimeError("Job cancelled")
-        filename = upload.filename or ""
-        ext = Path(filename).suffix.lower()
-        stats["total_files"] += 1
+        seen_documents: set[str] = set()
+        total = max(len(items), 1)
+        for idx, item in enumerate(items, 1):
+            if progress_cb is not None:
+                progress_cb(idx - 1, total, "upload", f"Processing {idx}/{total}")
+            if cancel_check is not None and cancel_check():
+                raise RuntimeError("Job cancelled")
+            filename = item.filename
+            ext = Path(filename).suffix.lower()
+            stats["total_files"] += 1
+            base_info = {"filename": filename, "path": item.path}
+            if item.archive:
+                base_info["archive"] = item.archive
 
-        if ext not in ALLOWED_EXTENSIONS:
-            stats["skipped_unsupported"] += 1
-            results.append({
-                "filename": filename,
-                "ok": False,
-                "status": "skipped_unsupported",
-                "message": f"Расширение {ext or '<empty>'} не поддерживается",
-            })
-            continue
-
-        title = _normalize_title(Path(filename).stem)
-        doc = docs_by_title.get(title)
-        if not doc:
-            stats["unmatched"] += 1
-            results.append({
-                "filename": filename,
-                "ok": False,
-                "status": "unmatched",
-                "title": title,
-                "message": "В library.documents не найден title, совпадающий с именем файла без расширения",
-            })
-            continue
-
-        expected_content_type = doc["content_type"]
-        actual_content_type = CONTENT_TYPE_BY_EXT.get(ext)
-        if expected_content_type and expected_content_type != actual_content_type:
-            stats["type_mismatch"] += 1
-            results.append({
-                "filename": filename,
-                "ok": False,
-                "status": "type_mismatch",
-                "document_id": str(doc["id"]),
-                "title": title,
-                "expected_content_type": expected_content_type,
-                "actual_content_type": actual_content_type,
-            })
-            continue
-
-        try:
-            sha256, size_bytes = _calc_sha256_and_size(upload.file)
-            mime_type = _guess_mime(filename)
-            storage_key = _build_storage_key(str(doc["id"]), int(doc["content_version"]), filename)
-            storage_path = f"{bucket}/{storage_key}"
-
-            if dry_run:
-                stats["success"] += 1
-                results.append({
-                    "filename": filename,
-                    "ok": True,
-                    "status": "dry_run",
-                    "document_id": str(doc["id"]),
-                    "title": title,
-                    "bucket": bucket,
-                    "storage_key": storage_key,
-                    "checksum": sha256,
-                    "size_bytes": size_bytes,
-                })
+            if ext not in ALLOWED_EXTENSIONS:
+                stats["skipped_unsupported"] += 1
+                results.append({**base_info, "ok": False, "status": "skipped_unsupported",
+                                "message": f"Расширение {ext or '<empty>'} не поддерживается"})
                 continue
 
-            try:
-                upload.file.seek(0)
-                client.upload_fileobj(
-                    Fileobj=upload.file,
-                    Bucket=bucket,
-                    Key=storage_key,
-                    ExtraArgs={"ContentType": mime_type},
+            file_title = _normalize_title(Path(filename).stem)
+            # Порядок сопоставления: document_id из манифеста, затем полный title из манифеста,
+            # затем имя файла. Имя файла последним: у длинных названий оно усечено.
+            doc = None
+            matched_by = None
+            title = file_title
+            if item.document_id:
+                doc = docs_by_id.get(item.document_id)
+                matched_by = "manifest_id" if doc else None
+            candidates = []
+            if doc is None and item.manifest_title:
+                candidates.append(("manifest_title", _normalize_title(item.manifest_title)))
+            if doc is None:
+                candidates.append(("title", file_title))
+            ambiguous = None
+            for kind, candidate in candidates:
+                if candidate in duplicate_set:
+                    ambiguous = ambiguous or candidate
+                    continue
+                found = docs_by_title.get(candidate)
+                if found:
+                    doc, matched_by, title = found, kind, candidate
+                    break
+            if doc is None and ambiguous:
+                stats["unmatched"] += 1
+                results.append({**base_info, "ok": False, "status": "ambiguous_title", "title": ambiguous,
+                                "message": "В library.documents несколько документов с таким title: исправьте дубли"})
+                continue
+            if doc is None:
+                stats["unmatched"] += 1
+                tried = ", ".join(
+                    part for part in (
+                        f"document_id {item.document_id}" if item.document_id else "",
+                        f"title из манифеста «{item.manifest_title}»" if item.manifest_title else "",
+                        f"имя файла «{file_title}»",
+                    ) if part
                 )
-            except (ClientError, BotoCoreError, Exception) as exc:
-                stats["upload_failed"] += 1
-                results.append({
-                    "filename": filename,
-                    "ok": False,
-                    "status": "upload_failed",
-                    "document_id": str(doc["id"]),
-                    "title": title,
-                    "message": str(exc),
-                })
+                results.append({**base_info, "ok": False, "status": "unmatched", "title": title,
+                                "document_id": item.document_id,
+                                "message": f"В library.documents нет документа: искали по {tried}"})
                 continue
 
+            doc_id = str(doc["id"])
+            if doc_id in seen_documents:
+                stats["duplicate_in_batch"] += 1
+                results.append({**base_info, "ok": False, "status": "duplicate_in_batch", "document_id": doc_id,
+                                "title": doc["title"], "message": "Для этого документа в загрузке уже есть другой файл"})
+                continue
+
+            actual_content_type = CONTENT_TYPE_BY_EXT.get(ext)
+            # Совпадение по document_id надёжно, тип не перепроверяем; по названию — проверяем.
+            if matched_by != "manifest_id" and not _content_type_compatible(doc["content_type"], actual_content_type):
+                stats["type_mismatch"] += 1
+                results.append({**base_info, "ok": False, "status": "type_mismatch", "document_id": doc_id,
+                                "title": title, "expected_content_type": doc["content_type"],
+                                "actual_content_type": actual_content_type})
+                continue
+
+            file_obj = None
             try:
-                with get_conn() as conn:
-                    _upsert_document_file_manual(
-                        conn,
-                        document_id=str(doc["id"]),
-                        bucket=bucket,
-                        storage_key=storage_key,
-                        storage_path=storage_path,
-                        filename=filename,
-                        mime_type=mime_type,
-                        size_bytes=size_bytes,
-                        sha256=sha256,
-                    )
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            """
-                            UPDATE library.documents
-                            SET checksum = %s,
-                                status = 'published',
-                                updated_at = now()
-                            WHERE id = %s
-                            """,
-                            (sha256, str(doc["id"])),
-                        )
-                    conn.commit()
-            except Exception as exc:
-                stats["db_failed"] += 1
-                results.append({
-                    "filename": filename,
-                    "ok": False,
-                    "status": "db_failed",
-                    "document_id": str(doc["id"]),
-                    "title": title,
-                    "message": str(exc),
-                })
-                continue
+                try:
+                    file_obj = item.open_file()
+                except Exception as exc:
+                    stats["archive_failed"] += 1
+                    results.append({**base_info, "ok": False, "status": "archive_failed", "document_id": doc_id,
+                                    "message": f"Не удалось распаковать файл: {exc}"})
+                    continue
 
-            stats["success"] += 1
-            results.append({
-                "filename": filename,
-                "ok": True,
-                "status": "imported",
-                "document_id": str(doc["id"]),
-                "title": title,
-                "bucket": bucket,
-                "storage_key": storage_key,
-                "checksum": sha256,
-                "size_bytes": size_bytes,
-            })
-        finally:
+                sha256, size_bytes = _calc_sha256_and_size(file_obj)
+                mime_type = _guess_mime(filename)
+                storage_key = _build_storage_key(doc_id, int(doc["content_version"]), filename)
+                storage_path = f"{bucket}/{storage_key}"
+                done = {**base_info, "document_id": doc_id, "title": doc["title"], "matched_by": matched_by,
+                        "bucket": bucket, "storage_key": storage_key, "checksum": sha256, "size_bytes": size_bytes}
+
+                if dry_run:
+                    seen_documents.add(doc_id)
+                    stats["success"] += 1
+                    results.append({**done, "ok": True, "status": "dry_run"})
+                    continue
+
+                try:
+                    file_obj.seek(0)
+                    client.upload_fileobj(
+                        Fileobj=file_obj,
+                        Bucket=bucket,
+                        Key=storage_key,
+                        ExtraArgs={"ContentType": mime_type},
+                    )
+                except (ClientError, BotoCoreError, Exception) as exc:
+                    stats["upload_failed"] += 1
+                    results.append({**base_info, "ok": False, "status": "upload_failed", "document_id": doc_id,
+                                    "title": doc["title"], "message": str(exc)})
+                    continue
+
+                try:
+                    with get_conn() as conn:
+                        _upsert_document_file_manual(
+                            conn,
+                            document_id=doc_id,
+                            bucket=bucket,
+                            storage_key=storage_key,
+                            storage_path=storage_path,
+                            filename=filename,
+                            mime_type=mime_type,
+                            size_bytes=size_bytes,
+                            sha256=sha256,
+                        )
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                UPDATE library.documents
+                                SET checksum = %s,
+                                    status = 'published',
+                                    updated_at = now()
+                                WHERE id = %s
+                                """,
+                                (sha256, doc_id),
+                            )
+                        conn.commit()
+                except Exception as exc:
+                    stats["db_failed"] += 1
+                    results.append({**base_info, "ok": False, "status": "db_failed", "document_id": doc_id,
+                                    "title": doc["title"], "message": str(exc)})
+                    continue
+
+                seen_documents.add(doc_id)
+                stats["success"] += 1
+                results.append({**done, "ok": True, "status": "imported"})
+            finally:
+                if file_obj is not None:
+                    try:
+                        file_obj.close()
+                    except Exception:
+                        pass
+    finally:
+        for resource in opened_archives:
+            try:
+                resource.close()
+            except Exception:
+                pass
+        for upload in files:
             try:
                 upload.file.close()
             except Exception:
                 pass
 
+    failures = (
+        stats["db_failed"] + stats["upload_failed"] + stats["type_mismatch"] + stats["unmatched"]
+        + stats["archive_failed"] + stats["skipped_too_large"] + stats["duplicate_in_batch"]
+    )
     return {
-        "ok": stats["db_failed"] == 0 and stats["upload_failed"] == 0 and stats["type_mismatch"] == 0 and stats["unmatched"] == 0,
+        "ok": failures == 0,
         "message": "Импорт в MinIO завершён",
         "stats": stats,
+        "duplicate_titles": duplicates,
         "results": results,
     }
