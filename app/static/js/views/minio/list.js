@@ -22,7 +22,7 @@ import { openModal } from '../../components/modal.js';
 import { toast } from '../../components/toast.js';
 import {
   listObjects,
-  presignDownload,
+  downloadObject,
   deleteObject,
 } from '../../api/minio.js';
 
@@ -373,10 +373,9 @@ export function mountMinioList(container) {
 
   async function openObject(key) {
     try {
-      const { url } = await presignDownload(key, { trackAs: `Скачать ${key}` });
-      window.open(url, '_blank', 'noopener');
+      await downloadObject(key);
     } catch (err) {
-      toast.error(`Не удалось получить URL: ${err?.message || err}`);
+      toast.error(`Не удалось скачать: ${err?.message || err}`);
     }
   }
 

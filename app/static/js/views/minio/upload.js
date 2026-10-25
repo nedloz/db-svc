@@ -1,18 +1,18 @@
-// Загрузка файлов в MinIO через presigned PUT.
+// Загрузка файлов в MinIO через db-svc: POST /api/minio/upload (multipart).
 // Идём не через fetch, а через XMLHttpRequest — нужен прогресс (`upload.onprogress`),
 // fetch его в браузерах не отдаёт.
 //
-// Жизненный цикл presigned URL — 10 минут. Если PUT падает с 403 (подпись
-// истекла), запрашиваем новый URL и пробуем ещё один раз. Большего не делаем,
-// чтобы не зациклиться.
+// Раньше файл уходил в MinIO прямо из браузера по presigned PUT, но порт MinIO наружу не
+// открыт (снаружи виден только nginx), и такая загрузка падала с ERR_CONNECTION_REFUSED.
+// Теперь файл принимает db-svc и кладёт в MinIO по внутренней сети.
 //
 // Регистрация в operations-indicator (M4) идёт вручную через startOperation,
-// потому что мы не дёргаем `request()` для самого PUT.
+// потому что мы не дёргаем `request()` для самой загрузки.
 
 import { createStore } from '../../state/store.js';
 import { createInput, createFilePicker } from '../../components/form-controls.js';
 import { toast } from '../../components/toast.js';
-import { presignUpload } from '../../api/minio.js';
+import { getToken, resolveUrl } from '../../api/client.js';
 import { startOperation } from '../../state/operations.js';
 
 const DEFAULT_PREFIX = 'uploads/';
@@ -174,28 +174,14 @@ export function mountMinioUpload(container, { onUploaded } = {}) {
   }
 
   async function uploadOne(id) {
-    updateItem(id, { status: 'presigning', progress: 0, error: null });
+    updateItem(id, { status: 'uploading', progress: 0, error: null });
     const item = getItem(id);
     if (!item) return;
 
     try {
-      let presign = await presignUpload(item.key, item.file.type || 'application/octet-stream', {
-        trackAs: `Presign ${item.key}`,
-      });
-      updateItem(id, { status: 'uploading', progress: 0 });
-
-      let result = await putWithProgress(id, presign.url, item.file);
-      if (result.status === 403) {
-        // Подпись истекла — берём новый URL и пробуем ещё раз.
-        updateItem(id, { status: 'presigning', progress: 0 });
-        presign = await presignUpload(item.key, item.file.type || 'application/octet-stream', {
-          trackAs: `Presign retry ${item.key}`,
-        });
-        updateItem(id, { status: 'uploading', progress: 0 });
-        result = await putWithProgress(id, presign.url, item.file);
-      }
+      const result = await uploadWithProgress(id, item.key, item.file);
       if (result.status < 200 || result.status >= 300) {
-        throw new Error(`PUT ${result.status}: ${result.statusText || 'upload failed'}`);
+        throw new Error(`HTTP ${result.status}: ${result.detail || result.statusText || 'upload failed'}`);
       }
       updateItem(id, { status: 'done', progress: 100, error: null });
     } catch (err) {
@@ -203,8 +189,10 @@ export function mountMinioUpload(container, { onUploaded } = {}) {
     }
   }
 
-  // Возвращает Promise<{status, statusText}>. Reject — только сеть / abort.
-  function putWithProgress(id, url, file) {
+  // Возвращает Promise<{status, statusText, detail}>. Reject — только сеть / abort.
+  // Файл уходит в db-svc (POST /api/minio/upload), а не прямо в MinIO: порт MinIO наружу
+  // не открыт, и presigned PUT из браузера упирался в ERR_CONNECTION_REFUSED.
+  function uploadWithProgress(id, key, file) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       const controller = new AbortController();
@@ -214,10 +202,13 @@ export function mountMinioUpload(container, { onUploaded } = {}) {
       });
       controller.signal.addEventListener('abort', () => { xhr.abort(); }, { once: true });
 
-      xhr.open('PUT', url);
-      // ВАЖНО: Не выставляем кастомные заголовки помимо Content-Type, чтобы
-      // подпись MinIO осталась валидной (SigV4 учитывает заголовки).
-      if (file.type) xhr.setRequestHeader('Content-Type', file.type);
+      xhr.open('POST', resolveUrl('api/minio/upload'));
+      // Под /admin/ авторизует кука админ-сессии; при прямом доступе — Bearer-токен панели.
+      const token = getToken();
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      const form = new FormData();
+      form.append('key', key);
+      form.append('file', file, file.name);
 
       xhr.upload.onprogress = (e) => {
         if (!e.lengthComputable) return;
@@ -226,7 +217,9 @@ export function mountMinioUpload(container, { onUploaded } = {}) {
       };
       xhr.onload = () => {
         opHandle?.finish();
-        resolve({ status: xhr.status, statusText: xhr.statusText });
+        let detail = '';
+        try { detail = JSON.parse(xhr.responseText)?.detail || ''; } catch (_e) { /* не JSON */ }
+        resolve({ status: xhr.status, statusText: xhr.statusText, detail });
       };
       xhr.onerror = () => {
         opHandle?.finish();
@@ -237,7 +230,7 @@ export function mountMinioUpload(container, { onUploaded } = {}) {
         reject(new Error('Загрузка отменена'));
       };
 
-      xhr.send(file);
+      xhr.send(form);
     });
   }
 
@@ -259,7 +252,7 @@ function buildKey(prefix, name) {
 function statusLabel(status) {
   switch (status) {
     case 'queued':     return 'в очереди';
-    case 'presigning': return 'получаю URL…';
+    case 'presigning': return 'подготовка…';
     case 'uploading':  return 'грузится';
     case 'done':       return '✓ загружено';
     case 'failed':     return '✗ ошибка';

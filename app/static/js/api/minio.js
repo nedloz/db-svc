@@ -5,7 +5,7 @@
 //
 // Здесь только request-обёртки. trackAs (M4) — опционально.
 
-import { request } from './client.js';
+import { request, getToken, resolveUrl } from './client.js';
 
 const enc = encodeURIComponent;
 
@@ -26,6 +26,25 @@ export async function listObjects(prefix = '', { maxKeys, continuationToken, ...
     isTruncated: Boolean(data?.is_truncated),
     nextToken: data?.next_continuation_token || null,
   };
+}
+
+// Скачивание через db-svc, а не по presigned URL: порт MinIO наружу не открыт. Читаем ответ
+// через fetch, чтобы ушёл тот же Authorization/кука, что и у остальных запросов панели, и отдаём
+// браузеру как файл.
+export async function downloadObject(key) {
+  const headers = {};
+  const token = getToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const resp = await fetch(resolveUrl(`api/minio/download?key=${enc(key)}`), { headers, credentials: 'same-origin' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const blob = await resp.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = key.split('/').pop() || 'download';
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
 
 export async function presignUpload(key, contentType = 'application/octet-stream', opts = {}) {

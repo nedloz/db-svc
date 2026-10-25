@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 from typing import Any, Optional
+from urllib.parse import quote
 
 import boto3
 from botocore.config import Config
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 
 from app.services.jobs import create_job, is_cancelled, mark_running, update_job
 from app.services.minio_import_placeholder import (
@@ -116,6 +118,65 @@ def presign_upload(key: str, content_type: str = "application/octet-stream") -> 
     )
 
     return {"bucket": bucket, "key": key, "method": "PUT", "url": url}
+
+
+def _check_key(key: str) -> None:
+    if not key or key.startswith("/") or ".." in key or len(key.encode()) > 1024:
+        raise HTTPException(status_code=400, detail="Bad key")
+
+
+@router.post("/upload")
+def upload_object(file: UploadFile = File(...), key: str = Form(...)) -> dict[str, Any]:
+    """Загрузка файла в MinIO через db-svc.
+
+    Прямая загрузка по presigned URL требует, чтобы браузер дотянулся до MinIO, а его порт
+    наружу не публикуется (снаружи виден только nginx). Поэтому админка шлёт файл сюда, а в
+    MinIO его кладёт сам db-svc по внутренней сети. Тот же путь работает и под /admin/ за
+    nginx, и при прямом доступе к db-svc.
+    """
+    _check_key(key)
+    client = s3_client()
+    bucket = ensure_bucket(client)
+    content_type = file.content_type or "application/octet-stream"
+    try:
+        file.file.seek(0, os.SEEK_END)
+        size = file.file.tell()
+        file.file.seek(0)
+        client.upload_fileobj(
+            Fileobj=file.file,
+            Bucket=bucket,
+            Key=key,
+            ExtraArgs={"ContentType": content_type},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"MinIO upload failed: {exc}")
+    finally:
+        file.file.close()
+    return {"ok": True, "bucket": bucket, "key": key, "size_bytes": size}
+
+
+@router.get("/download")
+def download_object(key: str) -> StreamingResponse:
+    """Скачивание объекта через db-svc (по тем же причинам, что и /upload)."""
+    _check_key(key)
+    client = s3_client()
+    bucket = ensure_bucket(client)
+    try:
+        obj = client.get_object(Bucket=bucket, Key=key)
+    except Exception as exc:
+        code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
+        if code in ("NoSuchKey", "404"):
+            raise HTTPException(status_code=404, detail="Object not found")
+        raise HTTPException(status_code=502, detail=f"MinIO download failed: {exc}")
+    filename = key.rsplit("/", 1)[-1] or "download"
+    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"}
+    if obj.get("ContentLength") is not None:
+        headers["Content-Length"] = str(obj["ContentLength"])
+    return StreamingResponse(
+        obj["Body"].iter_chunks(1024 * 1024),
+        media_type=obj.get("ContentType") or "application/octet-stream",
+        headers=headers,
+    )
 
 
 @router.get("/presign/download")
