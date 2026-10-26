@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 from fastapi import Request, HTTPException
 
+from app import user_context
+
 
 @dataclass(frozen=True)
 class Actor:
@@ -37,38 +39,34 @@ def admin_token() -> str:
     return os.getenv("DBSVC_ADMIN_TOKEN", "").strip()
 
 
-def gateway_role_trusted() -> bool:
-    """Доверять ли заголовку X-User-Role от gateway.
+def _verified_gateway_context(request: Request) -> user_context.UserContext | None:
+    """Администратор, подтверждённый шлюзом, или None.
 
-    Тот же приём, что у chat-svc с X-User-Id: nginx проверяет админ-сессию
-    (auth_request /auth/validate-admin) и только после этого проксирует запрос сюда,
-    проставляя роль. Благодаря этому Bearer-токен db-svc не нужен в браузере.
-
-    Безопасно это ровно до тех пор, пока порт db-svc не опубликован наружу: любой, кто
-    достучится до контейнера напрямую, сможет подделать заголовок. Отсюда и флаг —
-    при публикации порта доверие нужно отключать.
+    Раньше db-svc верил заголовку X-User-Role, который выставлял nginx, и это было безопасно
+    ровно пока порт контейнера не опубликован: любой, кто достучался бы напрямую, мог назвать
+    себя админом. Теперь шлюз передаёт подписанный auth-svc контекст (app/user_context.py,
+    аудитория db-svc), и подделать его без ключа нельзя. Админская роль проверяется по
+    подписанному утверждению, а не по заголовку.
     """
-    return os.getenv("DBSVC_TRUST_GATEWAY_ROLE", "true").strip().lower() in ("1", "true", "yes")
+    signed = request.headers.get(user_context.HEADER)
+    if signed:
+        try:
+            ctx = user_context.verify_from_env(signed)
+        except user_context.UserContextError:
+            raise HTTPException(status_code=401, detail="Invalid user context")
+        if ctx.role != "admin":
+            raise HTTPException(status_code=403, detail="Admin access required")
+        return ctx
+    # Переходный режим (USER_CONTEXT_ALLOW_LEGACY): прежние голые заголовки от nginx.
+    if user_context.allow_legacy():
+        if (request.headers.get("x-user-role") or "").strip().lower() == "admin":
+            return user_context.UserContext(
+                user_id=_legacy_user_id(request) or "", role="admin", audience="db-svc", expires_at=0
+            )
+    return None
 
 
-def _gateway_admin(request: Request) -> bool:
-    if not gateway_role_trusted():
-        return False
-    role = (request.headers.get("x-user-role") or "").strip().lower()
-    return role == "admin"
-
-
-def _client_ip(request: Request) -> str | None:
-    # За шлюзом реальный адрес лежит в X-Real-IP (nginx его проставляет); без шлюза
-    # заголовку верить нельзя, берём адрес сокета.
-    if gateway_role_trusted():
-        forwarded = (request.headers.get("x-real-ip") or "").strip()
-        if forwarded:
-            return forwarded[:64]
-    return request.client.host if request.client else None
-
-
-def _gateway_user_id(request: Request) -> str | None:
+def _legacy_user_id(request: Request) -> str | None:
     raw = (request.headers.get("x-user-id") or "").strip()
     try:
         return str(uuid.UUID(raw))
@@ -76,8 +74,21 @@ def _gateway_user_id(request: Request) -> str | None:
         return None
 
 
+def _client_ip(request: Request, via_gateway: bool) -> str | None:
+    # За шлюзом реальный адрес лежит в X-Real-IP (nginx его проставляет); подлинность шлюза
+    # подтверждена подписанным контекстом. Без шлюза заголовку верить нельзя, берём адрес сокета.
+    if via_gateway:
+        forwarded = (request.headers.get("x-real-ip") or "").strip()
+        if forwarded:
+            return forwarded[:64]
+    return request.client.host if request.client else None
+
+
 def verify_auth_configuration() -> None:
     """Проверка конфигурации при запуске. Вызывается из lifespan в app/main.py."""
+    # Ключ проверки контекста от шлюза: без него админка за nginx не заработает, а принимать
+    # неподписанное нельзя.
+    user_context.check_configuration()
     if admin_token():
         return
     if auth_is_disabled():
@@ -90,18 +101,25 @@ def verify_auth_configuration() -> None:
 
 
 def require_auth(request: Request) -> Actor:
-    """Проверка Bearer-токена для всех /api/*. Возвращает того, кто вызывает.
+    """Проверка доступа для всех /api/*. Возвращает того, кто вызывает.
+
+    Два способа: подписанный контекст администратора от шлюза либо Bearer-токен.
 
     Отсутствие токена в конфигурации здесь уже не означает «пропустить»: такое состояние
     отсекается при запуске (verify_auth_configuration) и допускается только при явном
     DBSVC_ALLOW_NO_AUTH.
     """
-    ip = _client_ip(request)
+    # Запрос пришёл через gateway, который проверил админ-сессию, и auth-svc это подписал.
+    ctx = _verified_gateway_context(request)
+    if ctx is not None:
+        return Actor(
+            kind="user",
+            user_id=ctx.user_id or None,
+            role="admin",
+            ip=_client_ip(request, via_gateway=True),
+        )
 
-    # Запрос пришёл через gateway, который уже проверил админ-сессию.
-    if _gateway_admin(request):
-        return Actor(kind="user", user_id=_gateway_user_id(request), role="admin", ip=ip)
-
+    ip = _client_ip(request, via_gateway=False)
     token_expected = admin_token()
     if not token_expected:
         if auth_is_disabled():

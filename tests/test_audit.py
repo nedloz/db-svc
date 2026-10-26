@@ -19,8 +19,22 @@ import uuid
 from pathlib import Path
 
 os.environ.setdefault("DBSVC_ADMIN_TOKEN", "test-token")
-os.environ.setdefault("DBSVC_TRUST_GATEWAY_ROLE", "true")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Админ приходит от шлюза с подписанным контекстом (app/user_context.py). Тест сам выпускает
+# одноразовые ключи и подписывает им, если ключи не заданы окружением.
+import tempfile  # noqa: E402
+
+from app import user_context  # noqa: E402
+
+os.environ.setdefault("USER_CONTEXT_AUDIENCE", "db-svc")
+if not os.environ.get("USER_CONTEXT_KEY_FILE"):
+    _dir = Path(tempfile.mkdtemp(prefix="dbsvc-test-keys-"))
+    _master = os.urandom(32)
+    (_dir / "master.key").write_text(_master.hex() + "\n")
+    (_dir / "db-svc.key").write_text(user_context.derive_key(_master, "db-svc").hex() + "\n")
+    os.environ["USER_CONTEXT_KEY_FILE"] = str(_dir / "db-svc.key")
+    os.environ["USER_CONTEXT_MASTER_FILE"] = str(_dir / "master.key")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -30,7 +44,13 @@ from app.services.pg import get_conn  # noqa: E402
 TOKEN = os.environ["DBSVC_ADMIN_TOKEN"]
 ADMIN_ID = str(uuid.uuid4())
 MARK = f"audit-test-{uuid.uuid4().hex[:8]}"
-GATEWAY = {"X-User-Role": "admin", "X-User-Id": ADMIN_ID, "X-Real-IP": "203.0.113.7"}
+GATEWAY = {
+    user_context.HEADER: user_context.sign(
+        user_context.load_keys(os.environ["USER_CONTEXT_MASTER_FILE"]),
+        "db-svc", ADMIN_ID, "admin", ttl_sec=3600,
+    ),
+    "X-Real-IP": "203.0.113.7",
+}
 BEARER = {"Authorization": f"Bearer {TOKEN}"}
 
 failures: list[str] = []
