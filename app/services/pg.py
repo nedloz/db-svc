@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Iterator, Any
 
 import psycopg
+from psycopg.conninfo import make_conninfo
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -29,6 +30,14 @@ class PgConfig:
     db: str
     user: str
     password: str
+    # Вход по клиентскому сертификату (infra/pki, infra/db/pg_hba.pki.conf): если задан
+    # POSTGRES_SSLCERT, пароль не используется, а подлинность роли подтверждает сертификат,
+    # CN которого равен имени роли. Файлы читаются libpq при каждом соединении, поэтому
+    # обновлённый сертификат подхватывается без перезапуска сервиса.
+    sslcert: str = ""
+    sslkey: str = ""
+    sslrootcert: str = ""
+    sslmode: str = ""
 
     @staticmethod
     def from_env() -> "PgConfig":
@@ -38,26 +47,39 @@ class PgConfig:
             db=os.getenv("POSTGRES_DB", "app_db"),
             user=os.getenv("POSTGRES_USER", "app_user"),
             password=os.getenv("POSTGRES_PASSWORD", "app_password"),
+            sslcert=os.getenv("POSTGRES_SSLCERT", ""),
+            sslkey=os.getenv("POSTGRES_SSLKEY", ""),
+            sslrootcert=os.getenv("POSTGRES_SSLROOTCERT", ""),
+            sslmode=os.getenv("POSTGRES_SSLMODE", ""),
         )
+
+    def conninfo(self) -> str:
+        params: dict[str, Any] = {"host": self.host, "port": self.port, "dbname": self.db, "user": self.user}
+        if self.sslcert:
+            # Сервер проверяется целиком (цепочка и имя хоста), а не принимается на веру.
+            params.update(
+                sslmode=self.sslmode or "verify-full",
+                sslcert=self.sslcert,
+                sslkey=self.sslkey,
+                sslrootcert=self.sslrootcert,
+            )
+        else:
+            params["password"] = self.password
+            if self.sslmode:
+                params["sslmode"] = self.sslmode
+        return make_conninfo(**params)
 
 
 @contextmanager
 def get_conn() -> Iterator[psycopg.Connection[Any]]:
-    cfg = PgConfig.from_env()
-    conninfo = (
-        f"host={cfg.host} port={cfg.port} dbname={cfg.db} user={cfg.user} password={cfg.password}"
-    )
-    with psycopg.connect(conninfo, autocommit=False) as conn:
+    with psycopg.connect(PgConfig.from_env().conninfo(), autocommit=False) as conn:
         yield conn
 
 def check_db_connection() -> dict[str, Any]:
     cfg = PgConfig.from_env()
-    conninfo = (
-        f"host={cfg.host} port={cfg.port} dbname={cfg.db} user={cfg.user} password={cfg.password}"
-    )
 
     try:
-        with psycopg.connect(conninfo, autocommit=True) as conn:
+        with psycopg.connect(cfg.conninfo(), autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT current_database(), current_user, version()")
                 row = cur.fetchone()
@@ -68,6 +90,7 @@ def check_db_connection() -> dict[str, Any]:
                     "version": row[2],
                     "host": cfg.host,
                     "port": cfg.port,
+                    "auth": "certificate" if cfg.sslcert else "password",
                 }
     except Exception as e:
         return {
