@@ -18,18 +18,7 @@ import httpx
 from app.mtls import httpx_kwargs
 
 GRAPH_RAG_URL = os.getenv("GRAPH_RAG_URL", "http://graph-rag-svc:8000")
-SERVICE_NAME = os.getenv("SERVICE_NAME", "db-svc")
-SERVICE_TOKEN = os.getenv("SERVICE_TOKEN", "")
-INTERNAL_AUTH_HEADER_NAME = os.getenv("INTERNAL_AUTH_HEADER_NAME", "X-Service-Token")
-INTERNAL_SERVICE_NAME_HEADER = os.getenv("INTERNAL_SERVICE_NAME_HEADER", "X-Service-Name")
 REQUEST_TIMEOUT = float(os.getenv("GRAPH_RAG_TIMEOUT_SEC", "60"))
-
-
-def _headers() -> dict[str, str]:
-    return {
-        INTERNAL_SERVICE_NAME_HEADER: SERVICE_NAME,
-        INTERNAL_AUTH_HEADER_NAME: SERVICE_TOKEN,
-    }
 
 
 def call(
@@ -47,7 +36,7 @@ def call(
     url = f"{GRAPH_RAG_URL.rstrip('/')}/internal/graph/{path.lstrip('/')}"
     try:
         with httpx.Client(timeout=REQUEST_TIMEOUT, **httpx_kwargs()) as client:
-            response = client.request(method, url, params=params, json=json_body, headers=_headers())
+            response = client.request(method, url, params=params, json=json_body)
     except httpx.HTTPError as exc:
         return 502, {"detail": f"graph-rag-svc недоступен: {exc}"}
 
