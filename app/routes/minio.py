@@ -9,6 +9,7 @@ from botocore.config import Config
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
+from app.services import audit
 from app.services.jobs import create_job, is_cancelled, mark_running, update_job
 from app.services.minio_import_placeholder import (
     get_minio_import_plan,
@@ -117,6 +118,10 @@ def presign_upload(key: str, content_type: str = "application/octet-stream") -> 
         ExpiresIn=60 * 10,
     )
 
+    # Загрузка по такой ссылке идёт мимо db-svc, и больше он о ней ничего не узнает:
+    # единственный след — выдача ссылки.
+    audit.record_standalone("minio.presign_upload", object_key=key, details={"content_type": content_type, "expires_sec": 600})
+
     return {"bucket": bucket, "key": key, "method": "PUT", "url": url}
 
 
@@ -149,9 +154,11 @@ def upload_object(file: UploadFile = File(...), key: str = Form(...)) -> dict[st
             ExtraArgs={"ContentType": content_type},
         )
     except Exception as exc:
+        audit.record_failure("minio.upload", object_key=key, error=str(exc), details={"content_type": content_type})
         raise HTTPException(status_code=502, detail=f"MinIO upload failed: {exc}")
     finally:
         file.file.close()
+    audit.record_standalone("minio.upload", object_key=key, details={"bucket": bucket, "size_bytes": size, "content_type": content_type})
     return {"ok": True, "bucket": bucket, "key": key, "size_bytes": size}
 
 
@@ -203,7 +210,12 @@ def delete_object(key: str) -> dict[str, Any]:
     client = s3_client()
     bucket = ensure_bucket(client)
 
-    client.delete_object(Bucket=bucket, Key=key)
+    try:
+        client.delete_object(Bucket=bucket, Key=key)
+    except Exception as exc:
+        audit.record_failure("minio.delete", object_key=key, error=str(exc))
+        raise
+    audit.record_standalone("minio.delete", object_key=key, details={"bucket": bucket})
     return {"ok": True, "deleted": key}
 
 
@@ -231,6 +243,10 @@ async def minio_import_files(
             return is_cancelled(job_id)
 
         result = import_files_to_minio(files=files, dry_run=dry_run, progress_cb=_progress, cancel_check=_cancelled)
+        audit.record_standalone(
+            "minio.import_files", success=bool(result.get("ok", True)),
+            details={"job_id": job_id, "dry_run": dry_run, "files": [f.filename for f in files], "result": audit.summarize(result), "stats": result.get("stats")},
+        )
         update_job(job_id, status="done" if result.get("ok", True) else "failed", result=result, progress_current=max(result.get("stats", {}).get("success", 0), 0), finished=True, error=None if result.get("ok", True) else result.get("message"))
         return {**result, "job_id": job_id}
     except HTTPException:
@@ -262,6 +278,10 @@ def remote_html_import_from_documents(
             return is_cancelled(job_id)
 
         result = import_remote_html_to_minio(dry_run=dry_run, limit=limit, force=force, progress_cb=_progress, cancel_check=_cancelled)
+        audit.record_standalone(
+            "minio.import_html", success=bool(result.get("ok", True)),
+            details={"job_id": job_id, "dry_run": dry_run, "force": force, "limit": limit, "result": audit.summarize(result), "stats": result.get("stats")},
+        )
         update_job(job_id, status="done" if result.get("ok", True) else "failed", result=result, progress_current=max(result.get("stats", {}).get("success", 0), 0), finished=True, error=None if result.get("ok", True) else result.get("message"))
         return {**result, "job_id": job_id}
     except HTTPException:

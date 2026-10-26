@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from app.services import audit
 from app.services.export import build_archive
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,10 @@ def _stream(kind: str, with_embeddings: bool) -> StreamingResponse:
 
     total = sum(manifest.get("tables", {}).values())
     logger.info("Выгрузка %s: строк всего %d", kind, total)
+    # Выгрузка — это вынос данных (в том числе эмбеддингов) целиком, поэтому тоже в журнале.
+    audit.record_standalone(
+        f"export.{kind}", details={"with_embeddings": with_embeddings, "rows": total, "tables": manifest.get("tables", {})},
+    )
 
     return StreamingResponse(
         _iter(),

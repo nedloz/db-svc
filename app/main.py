@@ -5,8 +5,8 @@ import time
 from contextlib import asynccontextmanager
 
 import logging
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.auth import auth_is_disabled, require_auth, verify_auth_configuration
@@ -15,7 +15,8 @@ from app.routes.export import router as export_router
 from app.routes.graph import router as graph_router
 from app.routes.jobs import router as jobs_router
 from app.routes.minio import router as minio_router
-from app.services.jobs import ensure_jobs_table
+from app.services import audit
+from app.services.jobs import jobs_table_exists
 from app.services.pg import check_db_connection
 
 logger = logging.getLogger(__name__)
@@ -69,11 +70,22 @@ async def lifespan(app: FastAPI):
             db_status.get("host"),
             db_status.get("port"),
         )
+        # Таблицы создаются init.sql / migrations/008, а не сервисом: у его роли нет прав на DDL.
+        # Уровень ERROR: без журнала задач не работает раздел импорта, а без журнала действий
+        # любое изменение данных отвечает 500 (запись о нём и само изменение неразделимы).
         try:
-            ensure_jobs_table()
+            if not jobs_table_exists():
+                logger.error(
+                    "Нет таблицы public.dbsvc_jobs: раздел импорта работать не будет. "
+                    "Примените infra/db/migrations/008_roles_and_audit.sql."
+                )
         except Exception as exc:
-            # Уровень ERROR, а не WARNING: без этой таблицы не работает весь раздел импорта.
-            logger.error("Не удалось создать таблицу журнала задач public.dbsvc_jobs: %s", exc)
+            logger.error("Не удалось проверить таблицу журнала задач public.dbsvc_jobs: %s", exc)
+        if not audit.check_audit_table():
+            logger.error(
+                "Нет таблицы audit.db_actions: изменения данных будут отклоняться. "
+                "Примените infra/db/migrations/008_roles_and_audit.sql."
+            )
     else:
         logger.error(
             "PostgreSQL недоступен после %s попыток: %s. Раздел импорта работать не будет.",
@@ -96,7 +108,19 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
 
     if path.startswith("/api/"):
-        require_auth(request)
+        # HTTPException, поднятое прямо в middleware, до обработчиков ошибок FastAPI не
+        # доходит, поэтому ответ собирается здесь.
+        try:
+            actor = require_auth(request)
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        # Актёр нужен журналу действий; запрос выполняется в копии контекста, куда это
+        # значение попадает (в том числе в рабочие потоки run_in_threadpool).
+        token = audit.set_actor(actor)
+        try:
+            return await call_next(request)
+        finally:
+            audit.reset_actor(token)
 
     return await call_next(request)
 

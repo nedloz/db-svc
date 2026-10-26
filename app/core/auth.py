@@ -1,7 +1,26 @@
 from __future__ import annotations
 
 import os
+import uuid
+from dataclasses import dataclass
+
 from fastapi import Request, HTTPException
+
+
+@dataclass(frozen=True)
+class Actor:
+    """Кто выполняет запрос. Попадает в журнал действий (audit.db_actions).
+
+    kind: 'user'      — администратор, пришедший через шлюз (известен его X-User-Id);
+          'token'     — вызов по общему Bearer-токену: личность неизвестна, известно лишь,
+                        что у вызывающего есть токен;
+          'anonymous' — авторизация отключена явным DBSVC_ALLOW_NO_AUTH.
+    """
+
+    kind: str
+    user_id: str | None = None
+    role: str | None = None
+    ip: str | None = None
 
 
 def auth_is_disabled() -> bool:
@@ -39,6 +58,24 @@ def _gateway_admin(request: Request) -> bool:
     return role == "admin"
 
 
+def _client_ip(request: Request) -> str | None:
+    # За шлюзом реальный адрес лежит в X-Real-IP (nginx его проставляет); без шлюза
+    # заголовку верить нельзя, берём адрес сокета.
+    if gateway_role_trusted():
+        forwarded = (request.headers.get("x-real-ip") or "").strip()
+        if forwarded:
+            return forwarded[:64]
+    return request.client.host if request.client else None
+
+
+def _gateway_user_id(request: Request) -> str | None:
+    raw = (request.headers.get("x-user-id") or "").strip()
+    try:
+        return str(uuid.UUID(raw))
+    except ValueError:
+        return None
+
+
 def verify_auth_configuration() -> None:
     """Проверка конфигурации при запуске. Вызывается из lifespan в app/main.py."""
     if admin_token():
@@ -52,21 +89,23 @@ def verify_auth_configuration() -> None:
     )
 
 
-def require_auth(request: Request) -> None:
-    """Проверка Bearer-токена для всех /api/*.
+def require_auth(request: Request) -> Actor:
+    """Проверка Bearer-токена для всех /api/*. Возвращает того, кто вызывает.
 
     Отсутствие токена в конфигурации здесь уже не означает «пропустить»: такое состояние
     отсекается при запуске (verify_auth_configuration) и допускается только при явном
     DBSVC_ALLOW_NO_AUTH.
     """
+    ip = _client_ip(request)
+
     # Запрос пришёл через gateway, который уже проверил админ-сессию.
     if _gateway_admin(request):
-        return
+        return Actor(kind="user", user_id=_gateway_user_id(request), role="admin", ip=ip)
 
     token_expected = admin_token()
     if not token_expected:
         if auth_is_disabled():
-            return
+            return Actor(kind="anonymous", ip=ip)
         # Сюда попасть можно только если переменные изменили уже после старта.
         raise HTTPException(status_code=503, detail="Auth is not configured")
 
@@ -80,3 +119,5 @@ def require_auth(request: Request) -> None:
 
     if parts[1] != token_expected:
         raise HTTPException(status_code=403, detail="Invalid token")
+
+    return Actor(kind="token", ip=ip)

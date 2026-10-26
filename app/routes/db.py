@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFil
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 
+from app.services import audit
 from app.services.catalog import (
     delete_row,
     export_csv_text,
@@ -128,6 +129,15 @@ async def import_dataset(
             )
 
         result = await run_in_threadpool(_work)
+        audit.record_standalone(
+            "import.dataset",
+            success=bool(result.get("ok", True)),
+            details={
+                "job_id": job_id, "replace_mode": replace_mode, "dry_run": dry_run,
+                "files": {name: fname for name, (fname, _) in file_map.items()},
+                "result": audit.summarize(result),
+            },
+        )
         final_status = "done" if result.get("ok", True) else "failed"
         job = get_job(job_id)
         progress_total = job["progress_total"] if job else 0
@@ -139,10 +149,12 @@ async def import_dataset(
             update_job(job_id, status="cancelled", error=str(exc), cancelled=True, finished=True)
             raise HTTPException(status_code=499, detail="Job cancelled")
         update_job(job_id, status="failed", error=str(exc), finished=True)
+        audit.record_failure("import.dataset", error=str(exc), details={"job_id": job_id, "replace_mode": replace_mode, "dry_run": dry_run})
         raise HTTPException(status_code=500, detail=f"Ошибка импорта: {str(exc)}")
     except Exception as exc:
         logger.exception("Dataset import failed")
         update_job(job_id, status="failed", error=str(exc), finished=True)
+        audit.record_failure("import.dataset", error=str(exc), details={"job_id": job_id, "replace_mode": replace_mode, "dry_run": dry_run})
         raise HTTPException(status_code=500, detail=f"Ошибка импорта: {str(exc)}")
 
 
@@ -186,6 +198,16 @@ async def import_csv(
 
         mark_running(job_id, stage="parse", message="Parsing CSV", progress_total=1)
         result = await run_in_threadpool(_work)
+        audit.record_standalone(
+            "import.csv",
+            success=bool(result.get("ok")),
+            schema=schema_name,
+            table=table,
+            details={
+                "job_id": job_id, "mode": mode, "filename": file.filename,
+                "result": audit.summarize(result),
+            },
+        )
         if result.get("ok"):
             update_job(job_id, status="done", result=result, progress_current=max(result.get("rows_inserted", 0), result.get("rows_inserted_before_failure", 0)), progress_total=max(result.get("rows_inserted", 0), 1), finished=True)
             return {**result, "job_id": job_id}
@@ -198,10 +220,12 @@ async def import_csv(
             update_job(job_id, status="cancelled", error=str(exc), cancelled=True, finished=True)
             raise HTTPException(status_code=499, detail="Job cancelled")
         update_job(job_id, status="failed", error=str(exc), finished=True)
+        audit.record_failure("import.csv", schema=schema_name, table=table, error=str(exc), details={"job_id": job_id, "mode": mode, "filename": file.filename})
         raise HTTPException(status_code=500, detail=f"Ошибка CSV импорта: {str(exc)}")
     except Exception as exc:
         logger.exception("CSV import failed")
         update_job(job_id, status="failed", error=str(exc), finished=True)
+        audit.record_failure("import.csv", schema=schema_name, table=table, error=str(exc), details={"job_id": job_id, "mode": mode, "filename": file.filename})
         raise HTTPException(status_code=500, detail=f"Ошибка CSV импорта: {str(exc)}")
 
 
@@ -308,6 +332,7 @@ async def create_row(schema: str, table: str, payload: dict[str, Any] | None = B
         raise
     except Exception as exc:
         logger.exception("Row insert failed")
+        audit.record_failure("row.insert", schema=schema, table=table, error=str(exc), details={"payload": payload})
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -323,6 +348,7 @@ async def patch_row(schema: str, table: str, pk: str, payload: dict[str, Any] | 
         raise
     except Exception as exc:
         logger.exception("Row update failed")
+        audit.record_failure("row.update", schema=schema, table=table, pk=pk, error=str(exc), details={"payload": payload})
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -337,6 +363,7 @@ async def delete_table_row(schema: str, table: str, pk: str):
         raise
     except Exception as exc:
         logger.exception("Row delete failed")
+        audit.record_failure("row.delete", schema=schema, table=table, pk=pk, error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc))
 
 

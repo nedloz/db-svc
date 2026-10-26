@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+from app.services import audit
 from app.services.jobs import get_job, request_cancel
 
 router = APIRouter()
@@ -20,4 +21,5 @@ def cancel_job(job_id: str):
     job = request_cancel(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail='Job not found')
+    audit.record_standalone('job.cancel', details={'job_id': job_id, 'job_type': job.get('job_type'), 'status': job.get('status')})
     return job

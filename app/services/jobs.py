@@ -8,32 +8,14 @@ from psycopg.types.json import Json
 
 from app.services.pg import get_conn
 
-JOBS_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS public.dbsvc_jobs (
-    id UUID PRIMARY KEY,
-    job_type TEXT NOT NULL,
-    status TEXT NOT NULL,
-    stage TEXT,
-    message TEXT,
-    progress_current INTEGER NOT NULL DEFAULT 0,
-    progress_total INTEGER NOT NULL DEFAULT 0,
-    cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
-    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-    result JSONB,
-    error TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    finished_at TIMESTAMPTZ,
-    cancelled_at TIMESTAMPTZ
-)
-"""
-
-
-def ensure_jobs_table() -> None:
+def jobs_table_exists() -> bool:
+    """Проверяет наличие журнала задач. Таблицу создают init.sql / migrations/008: у роли
+    db-svc нет права на DDL, поэтому прежнее `CREATE TABLE IF NOT EXISTS` при старте
+    невозможно."""
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(JOBS_TABLE_SQL)
-        conn.commit()
+            cur.execute("SELECT to_regclass('public.dbsvc_jobs') IS NOT NULL")
+            return bool(cur.fetchone()[0])
 
 
 

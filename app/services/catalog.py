@@ -13,6 +13,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from psycopg.types.json import Json
 
+from app.services import audit
 from app.services.pg import get_conn, qident, validate_ident
 
 
@@ -103,18 +104,22 @@ def serialize_row(columns: list[str], row: tuple[Any, ...]) -> dict[str, Any]:
 
 
 def _fetch_pk_columns(conn, schema: str, table: str) -> list[str]:
+    # pg_catalog, а не information_schema: последний показывает ограничения только тех
+    # таблиц, где у роли есть права помимо SELECT. К графу, чатам и таблицам токенов у роли
+    # db-svc только чтение, и через information_schema у них пропадали бы первичные ключи.
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT kcu.column_name
-            FROM information_schema.table_constraints tc
-            JOIN information_schema.key_column_usage kcu
-              ON tc.constraint_name = kcu.constraint_name
-             AND tc.table_schema = kcu.table_schema
-            WHERE tc.constraint_type = 'PRIMARY KEY'
-              AND tc.table_schema = %s
-              AND tc.table_name = %s
-            ORDER BY kcu.ordinal_position
+            SELECT a.attname
+            FROM pg_constraint con
+            JOIN pg_class c ON c.oid = con.conrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+            JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+            WHERE con.contype = 'p'
+              AND n.nspname = %s
+              AND c.relname = %s
+            ORDER BY k.ord
             """,
             (schema, table),
         )
@@ -404,6 +409,22 @@ def fetch_row_by_pk(schema: str, table: str, pk_value: Any) -> dict[str, Any] | 
 
 
 
+def _returning(columns_meta: "list[ColumnInfo]") -> str:
+    # Явный список вместо `*`: у роли db-svc нет доступа к часть колонок (password_hash,
+    # token_hash), и `RETURNING *` / `SELECT *` по таким таблицам отвечали бы permission denied.
+    # information_schema.columns отдаёт только доступные роли колонки, так что список честный.
+    return ', '.join(qident(c.name) for c in columns_meta)
+
+
+def _row_pk(columns_meta: "list[ColumnInfo]", row: dict[str, Any]) -> Any:
+    pk_cols = [c.name for c in columns_meta if c.is_pk]
+    if not pk_cols:
+        return None
+    if len(pk_cols) == 1:
+        return row.get(pk_cols[0])
+    return {name: row.get(name) for name in pk_cols}
+
+
 def insert_row(schema: str, table: str, payload: dict[str, Any]) -> dict[str, Any]:
     columns_meta = get_table_columns(schema, table)
     columns = {c.name: c for c in columns_meta}
@@ -412,21 +433,28 @@ def insert_row(schema: str, table: str, payload: dict[str, Any]) -> dict[str, An
         raise HTTPException(status_code=400, detail=f'Unknown columns: {", ".join(sorted(unknown))}')
 
     insert_cols = list(payload.keys())
+    returning = _returning(columns_meta)
+    names = [c.name for c in columns_meta]
     with get_conn() as conn:
         with conn.cursor() as cur:
             if insert_cols:
                 col_sql = ', '.join(qident(c) for c in insert_cols)
                 placeholders = ', '.join(['%s'] * len(insert_cols))
                 cur.execute(
-                    f'INSERT INTO {qident(schema)}.{qident(table)} ({col_sql}) VALUES ({placeholders}) RETURNING *',
+                    f'INSERT INTO {qident(schema)}.{qident(table)} ({col_sql}) VALUES ({placeholders}) RETURNING {returning}',
                     tuple(_adapt_param(payload[c]) for c in insert_cols),
                 )
             else:
-                cur.execute(f'INSERT INTO {qident(schema)}.{qident(table)} DEFAULT VALUES RETURNING *')
-            row = cur.fetchone()
+                cur.execute(f'INSERT INTO {qident(schema)}.{qident(table)} DEFAULT VALUES RETURNING {returning}')
+            row = serialize_row(names, cur.fetchone())
+            # Запись журнала в той же транзакции: нет следа — нет и вставки.
+            audit.record(
+                conn, 'row.insert', schema=schema, table=table,
+                pk=_row_pk(columns_meta, row), details={'after': row},
+            )
             conn.commit()
 
-    return serialize_row([c.name for c in columns_meta], row)
+    return row
 
 
 
@@ -444,35 +472,64 @@ def update_row(schema: str, table: str, pk_value: Any, payload: dict[str, Any]) 
     set_sql = ', '.join(f'{qident(col)} = %s' for col in payload.keys())
     params = [_adapt_param(payload[col]) for col in payload.keys()]
     params.extend(where_params)
+    returning = _returning(columns_meta)
+    names = [c.name for c in columns_meta]
 
     with get_conn() as conn:
         with conn.cursor() as cur:
+            # Прежнее значение читается под блокировкой строки: в журнал попадает ровно то,
+            # что было затёрто этим UPDATE, а не то, что успел записать параллельный запрос.
             cur.execute(
-                f'UPDATE {qident(schema)}.{qident(table)} SET {set_sql} WHERE {where} RETURNING *',
-                tuple(params),
+                f'SELECT {returning} FROM {qident(schema)}.{qident(table)} WHERE {where} FOR UPDATE',
+                tuple(where_params),
             )
-            row = cur.fetchone()
-            if row is None:
+            before_raw = cur.fetchone()
+            if before_raw is None:
                 conn.rollback()
                 return None
+            before = serialize_row(names, before_raw)
+
+            cur.execute(
+                f'UPDATE {qident(schema)}.{qident(table)} SET {set_sql} WHERE {where} RETURNING {returning}',
+                tuple(params),
+            )
+            row = serialize_row(names, cur.fetchone())
+            changes = {
+                col: {'before': before.get(col), 'after': row.get(col)}
+                for col in payload.keys()
+                if before.get(col) != row.get(col)
+            }
+            audit.record(
+                conn, 'row.update', schema=schema, table=table,
+                pk=audit.pk_text(pk_value), details={'changes': changes},
+            )
             conn.commit()
 
-    return serialize_row([c.name for c in columns_meta], row)
+    return row
 
 
 
 def delete_row(schema: str, table: str, pk_value: Any) -> bool:
     columns_meta = get_table_columns(schema, table)
     where, params = _pk_where(columns_meta, pk_value)
+    returning = _returning(columns_meta)
+    names = [c.name for c in columns_meta]
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                f'DELETE FROM {qident(schema)}.{qident(table)} WHERE {where}',
+                f'DELETE FROM {qident(schema)}.{qident(table)} WHERE {where} RETURNING {returning}',
                 tuple(params),
             )
-            deleted = cur.rowcount > 0
+            deleted_raw = cur.fetchone()
+            if deleted_raw is None:
+                conn.rollback()
+                return False
+            audit.record(
+                conn, 'row.delete', schema=schema, table=table,
+                pk=audit.pk_text(pk_value), details={'deleted': serialize_row(names, deleted_raw)},
+            )
             conn.commit()
-    return deleted
+    return True
 
 
 
@@ -484,30 +541,23 @@ def get_relations(schema: str, table: str) -> list[dict[str, Any]]:
             cur.execute(
                 """
                 SELECT
-                    kcu.column_name,
-                    ccu.table_schema,
-                    ccu.table_name,
-                    ccu.column_name,
-                    rc.delete_rule,
-                    c.is_nullable
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.key_column_usage kcu
-                  ON tc.constraint_name = kcu.constraint_name
-                 AND tc.table_schema = kcu.table_schema
-                JOIN information_schema.referential_constraints rc
-                  ON tc.constraint_name = rc.constraint_name
-                 AND tc.table_schema = rc.constraint_schema
-                JOIN information_schema.constraint_column_usage ccu
-                  ON rc.unique_constraint_name = ccu.constraint_name
-                 AND rc.unique_constraint_schema = ccu.constraint_schema
-                JOIN information_schema.columns c
-                  ON c.table_schema = kcu.table_schema
-                 AND c.table_name = kcu.table_name
-                 AND c.column_name = kcu.column_name
-                WHERE tc.constraint_type = 'FOREIGN KEY'
-                  AND tc.table_schema = %s
-                  AND tc.table_name = %s
-                ORDER BY kcu.ordinal_position
+                    a.attname, rn.nspname, rc.relname, ra.attname,
+                    CASE con.confdeltype
+                        WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
+                        WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT'
+                    END,
+                    CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END
+                FROM pg_constraint con
+                JOIN pg_class c ON c.oid = con.conrelid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                JOIN pg_class rc ON rc.oid = con.confrelid
+                JOIN pg_namespace rn ON rn.oid = rc.relnamespace
+                CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(attnum, refattnum, ord)
+                JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+                JOIN pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = k.refattnum
+                WHERE con.contype = 'f'
+                  AND n.nspname = %s AND c.relname = %s
+                ORDER BY con.conname, k.ord
                 """,
                 (schema, table),
             )
@@ -532,30 +582,23 @@ def get_inbound_relations(schema: str, table: str) -> list[dict[str, Any]]:
             cur.execute(
                 """
                 SELECT
-                    kcu.table_schema,
-                    kcu.table_name,
-                    kcu.column_name,
-                    ccu.column_name,
-                    rc.delete_rule,
-                    c.is_nullable
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.key_column_usage kcu
-                  ON tc.constraint_name = kcu.constraint_name
-                 AND tc.table_schema = kcu.table_schema
-                JOIN information_schema.referential_constraints rc
-                  ON tc.constraint_name = rc.constraint_name
-                 AND tc.table_schema = rc.constraint_schema
-                JOIN information_schema.constraint_column_usage ccu
-                  ON rc.unique_constraint_name = ccu.constraint_name
-                 AND rc.unique_constraint_schema = ccu.constraint_schema
-                JOIN information_schema.columns c
-                  ON c.table_schema = kcu.table_schema
-                 AND c.table_name = kcu.table_name
-                 AND c.column_name = kcu.column_name
-                WHERE tc.constraint_type = 'FOREIGN KEY'
-                  AND ccu.table_schema = %s
-                  AND ccu.table_name = %s
-                ORDER BY kcu.table_schema, kcu.table_name, kcu.ordinal_position
+                    n.nspname, c.relname, a.attname, ra.attname,
+                    CASE con.confdeltype
+                        WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
+                        WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT'
+                    END,
+                    CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END
+                FROM pg_constraint con
+                JOIN pg_class c ON c.oid = con.conrelid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                JOIN pg_class rc ON rc.oid = con.confrelid
+                JOIN pg_namespace rn ON rn.oid = rc.relnamespace
+                CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(attnum, refattnum, ord)
+                JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+                JOIN pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = k.refattnum
+                WHERE con.contype = 'f'
+                  AND rn.nspname = %s AND rc.relname = %s
+                ORDER BY n.nspname, c.relname, con.conname, k.ord
                 """,
                 (schema, table),
             )
@@ -601,14 +644,14 @@ def get_dependencies(schema: str, table: str, pk_value: Any, sample: int = 3) ->
                 count = int(cur.fetchone()[0])
                 sample_rows: list[dict[str, Any]] = []
                 if sample > 0 and count > 0:
-                    cur.execute(
-                        f'SELECT * FROM {qident(child_schema)}.{qident(child_table)} WHERE {qident(child_column)} = %s LIMIT %s',
-                        (ref_value, sample),
-                    )
-                    sample_rows_raw = cur.fetchall()
                     child_columns = get_table_columns(child_schema, child_table)
                     child_names = [c.name for c in child_columns]
-                    sample_rows = [serialize_row(child_names, row) for row in sample_rows_raw]
+                    cur.execute(
+                        f'SELECT {_returning(child_columns)} FROM {qident(child_schema)}.{qident(child_table)} '
+                        f'WHERE {qident(child_column)} = %s LIMIT %s',
+                        (ref_value, sample),
+                    )
+                    sample_rows = [serialize_row(child_names, row) for row in cur.fetchall()]
         total += count
         item = {
             'schema': child_schema,

@@ -12,6 +12,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from app.services import audit
 from app.services.graph_rag import call
 
 router = APIRouter()
@@ -36,4 +37,11 @@ async def proxy_graph_api(path: str, request: Request):
         params=dict(request.query_params),
         json_body=json_body,
     )
+    # Чтение журнала не засоряет; изменения графа фиксируются вместе с ответом graph-rag-svc.
+    if request.method != "GET":
+        audit.record_standalone(
+            f"graph.{request.method.lower()}",
+            success=status < 400,
+            details={"path": path, "params": dict(request.query_params), "body": json_body, "status": status},
+        )
     return JSONResponse(status_code=status, content=payload)
