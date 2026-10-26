@@ -9,6 +9,7 @@ from botocore.config import Config
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
+from app import s3_tls
 from app.services import audit
 from app.services.jobs import create_job, is_cancelled, mark_running, update_job
 from app.services.minio_import_placeholder import (
@@ -26,10 +27,11 @@ def _make_client(endpoint: str, secure: bool):
     return boto3.client(
         "s3",
         endpoint_url=f"{scheme}://{endpoint}",
-        aws_access_key_id=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
-        aws_secret_access_key=os.getenv("MINIO_SECRET_KEY", "minioadmin"),
+        aws_access_key_id=os.environ["MINIO_ACCESS_KEY"],
+        aws_secret_access_key=os.environ["MINIO_SECRET_KEY"],
         region_name=os.getenv("MINIO_REGION", "us-east-1"),
-        config=Config(signature_version="s3v4"),
+        verify=s3_tls.verify(),
+        config=Config(signature_version="s3v4", client_cert=s3_tls.client_cert()),
     )
 
 

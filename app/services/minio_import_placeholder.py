@@ -19,6 +19,7 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import UploadFile
 
+from app import s3_tls
 from app.services.pg import get_conn
 from app.services.html_processor import clean_html_for_rag
 
@@ -69,8 +70,8 @@ def _normalize_title(value: str) -> str:
 
 def _s3_client():
     endpoint = os.getenv("MINIO_ENDPOINT", "minio:9000")
-    access_key = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-    secret_key = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+    access_key = os.environ["MINIO_ACCESS_KEY"]
+    secret_key = os.environ["MINIO_SECRET_KEY"]
     secure = os.getenv("MINIO_SECURE", "false").lower() in ("1", "true", "yes")
 
     scheme = "https" if secure else "http"
@@ -82,7 +83,8 @@ def _s3_client():
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
         region_name=os.getenv("MINIO_REGION", "us-east-1"),
-        config=Config(signature_version="s3v4"),
+        verify=s3_tls.verify(),
+        config=Config(signature_version="s3v4", client_cert=s3_tls.client_cert()),
     )
 
 
