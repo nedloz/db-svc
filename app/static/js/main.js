@@ -19,8 +19,9 @@ import { dbExplorerView } from './views/db-explorer/index.js';
 import { importView } from './views/import/index.js';
 import { minioView } from './views/minio/index.js';
 import { graphView } from './views/graph/index.js';
+import { emailsView } from './views/emails/index.js';
 
-const VIEWS = [dbExplorerView, importView, minioView, graphView];
+const VIEWS = [dbExplorerView, importView, minioView, graphView, emailsView];
 const HEALTH_INTERVAL_MS = 30000;
 
 const root = document.getElementById('app');

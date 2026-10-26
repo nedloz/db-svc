@@ -125,6 +125,21 @@ async def auth_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def revalidate_panel_assets(request: Request, call_next):
+    """Страница и скрипты панели проверяются на актуальность при каждой загрузке.
+
+    Без Cache-Control браузер кэширует их по Last-Modified на неопределённый срок: после
+    обновления образа в панели оставались старые main.js и список вкладок. С no-cache он
+    всё равно использует кэш, но сначала спрашивает по ETag, не изменился ли файл.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path in ("/", "/index.html") or path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.get("/health")
 async def health():
     return {"ok": True}

@@ -1,0 +1,64 @@
+/* Вкладка «Письма»: редактор слева, предпросмотр справа.
+   .app-main — грид 1fr 2fr; без grid-column вкладка занимает одну первую колонку, то есть
+   треть ширины (так же, как у .graph-view / .minio-view / .import-view). */
+.emails-view {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-7);
+}
+
+.emails-view__split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--sp-5);
+}
+
+.emails-view__col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.emails-view__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.emails-view__editor {
+  width: 100%;
+  height: 560px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre-wrap;   /* перенос длинных строк, отступы сохраняются */
+  overflow: auto;
+}
+
+.emails-view__preview {
+  width: 100%;
+  height: 560px;
+  border: 1px solid var(--border, #d0d5dd);
+  border-radius: var(--r-lg);
+  background: #fff;
+}
+
+.emails-view__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.emails-view__status--warn {
+  color: #b54708;
+}
+
+@media (max-width: 1100px) {
+  .emails-view__split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
