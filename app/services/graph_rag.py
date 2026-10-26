@@ -15,6 +15,8 @@ from typing import Any
 
 import httpx
 
+from app.mtls import httpx_kwargs
+
 GRAPH_RAG_URL = os.getenv("GRAPH_RAG_URL", "http://graph-rag-svc:8000")
 SERVICE_NAME = os.getenv("SERVICE_NAME", "db-svc")
 SERVICE_TOKEN = os.getenv("SERVICE_TOKEN", "")
@@ -44,7 +46,7 @@ def call(
     """
     url = f"{GRAPH_RAG_URL.rstrip('/')}/internal/graph/{path.lstrip('/')}"
     try:
-        with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
+        with httpx.Client(timeout=REQUEST_TIMEOUT, **httpx_kwargs()) as client:
             response = client.request(method, url, params=params, json=json_body, headers=_headers())
     except httpx.HTTPError as exc:
         return 502, {"detail": f"graph-rag-svc недоступен: {exc}"}
