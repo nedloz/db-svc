@@ -43,6 +43,21 @@ setInterval(refreshHealth, HEALTH_INTERVAL_MS);
 
 // ---------- Shell ----------
 
+// Админка открывается с сайта полной загрузкой страницы, поэтому referrer — страница сайта,
+// с которой админ ушёл. Туда и возвращаем; если пришли не с сайта (закладка, прямая
+// ссылка) — на главную. Чужой origin не принимаем, чтобы кнопка не уводила со своего домена.
+function resolveSiteReturnUrl() {
+  try {
+    const ref = new URL(document.referrer);
+    if (ref.origin === window.location.origin && !ref.pathname.startsWith('/admin')) {
+      return ref.pathname + ref.search + ref.hash;
+    }
+  } catch {
+    // referrer пустой или не URL — остаётся главная
+  }
+  return '/';
+}
+
 function mountShell() {
   root.replaceChildren(buildHeaderCard(), buildMain());
   renderActiveView();
@@ -58,6 +73,19 @@ function buildHeaderCard() {
   const title = document.createElement('h1');
   title.className = 'app-header__title';
   title.textContent = 'ADMIN CONSOLE';
+
+  // Стрелка на сайт стоит перед заголовком, а не среди кнопок справа: третья кнопка
+  // расширяла правую колонку сетки и сжимала статусы.
+  const siteLink = document.createElement('a');
+  siteLink.className = 'btn btn--ghost app-header__back';
+  siteLink.href = resolveSiteReturnUrl();
+  siteLink.textContent = '←';
+  siteLink.title = 'Вернуться на сайт';
+  siteLink.setAttribute('aria-label', 'Вернуться на сайт');
+
+  const brand = document.createElement('div');
+  brand.className = 'app-header__brand';
+  brand.append(siteLink, title);
 
   const statuses = document.createElement('div');
   statuses.className = 'app-header__status-group';
@@ -172,7 +200,7 @@ function buildHeaderCard() {
 
   tokenButtons.append(saveBtn, clearBtn);
 
-  header.append(title, statuses, topActions, nav, tokenGroup, tokenButtons);
+  header.append(brand, statuses, topActions, nav, tokenGroup, tokenButtons);
   return header;
 }
 

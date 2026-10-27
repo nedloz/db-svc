@@ -20,9 +20,24 @@
   align-items: center;
 }
 
-.app-header__title {
+.app-header__brand {
   grid-column: 1;
   grid-row: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+
+.app-header__back {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  flex-shrink: 0;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.app-header__title {
   font-size: var(--fs-lg);
   font-weight: var(--fw-black);
   letter-spacing: 0.04em;

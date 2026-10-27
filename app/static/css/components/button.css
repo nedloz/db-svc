@@ -13,6 +13,7 @@
   font-size: var(--fs-md);
   font-weight: var(--fw-medium);
   white-space: nowrap;
+  text-decoration: none;
   transition: background var(--t-fast), transform var(--t-fast), opacity var(--t-fast);
 }
 
