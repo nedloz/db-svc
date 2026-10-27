@@ -231,6 +231,25 @@ def get_minio_import_plan() -> dict[str, Any]:
     }
 
 
+# Привязка файла к документу. Кроме checksum и публикации ставит документ в очередь индексации:
+# без этого документ, у которого файла не было (IVHR-1), оставался в pending без движения до
+# случайного опроса, а документ с заменённым файлом не переиндексировался. Условие повторяет логику
+# «содержимое новое»: другой checksum либо документ ещё не проиндексирован. В SET все правые части
+# видят старую строку, поэтому checksum и ingest_status сравниваются со значениями до обновления.
+# Триггеры library.documents_ingest_reset / _notify (миграция 006) сбрасывают счётчик попыток и будят воркер.
+ATTACH_FILE_SQL = """
+    UPDATE library.documents
+    SET checksum = %s,
+        status = 'published',
+        updated_at = now(),
+        ingest_status = CASE WHEN checksum IS DISTINCT FROM %s OR ingest_status <> 'indexed'
+                             THEN 'pending' ELSE ingest_status END,
+        ingest_error = CASE WHEN checksum IS DISTINCT FROM %s OR ingest_status <> 'indexed'
+                            THEN NULL ELSE ingest_error END
+    WHERE id = %s
+"""
+
+
 def _upsert_document_file_manual(
     conn,
     *,
@@ -568,14 +587,8 @@ def import_remote_html_to_minio(dry_run: bool = False, limit: int | None = None,
                 )
                 with conn.cursor() as cur:
                     cur.execute(
-                        """
-                        UPDATE library.documents
-                        SET checksum = %s,
-                            status = 'published',
-                            updated_at = now()
-                        WHERE id = %s
-                        """,
-                        (sha256, doc.id),
+                        ATTACH_FILE_SQL,
+                        (sha256, sha256, sha256, doc.id),
                     )
                 conn.commit()
         except Exception as exc:
@@ -925,14 +938,8 @@ def import_files_to_minio(files: list[UploadFile], dry_run: bool = False, progre
                         )
                         with conn.cursor() as cur:
                             cur.execute(
-                                """
-                                UPDATE library.documents
-                                SET checksum = %s,
-                                    status = 'published',
-                                    updated_at = now()
-                                WHERE id = %s
-                                """,
-                                (sha256, doc_id),
+                                ATTACH_FILE_SQL,
+                                (sha256, sha256, sha256, doc_id),
                             )
                         conn.commit()
                 except Exception as exc:
