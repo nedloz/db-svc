@@ -26,6 +26,7 @@ from fastapi import HTTPException
 from psycopg.types.json import Json
 
 from app.core.auth import Actor
+from app.metrics import ADMIN_ACTIONS, IMPORTS
 from app.services.pg import get_conn
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,13 @@ def _params(
     )
 
 
+def _count(action: str, success: bool) -> None:
+    result = "success" if success else "failure"
+    ADMIN_ACTIONS.labels(action=action, result=result).inc()
+    if action.startswith("import."):
+        IMPORTS.labels(kind=action.split(".", 1)[1], result=result).inc()
+
+
 def record(
     conn,
     action: str,
@@ -150,6 +158,7 @@ def record(
     )
     with conn.cursor() as cur:
         cur.execute(_INSERT_SQL, params)
+    _count(action, success)
 
 
 def record_standalone(
@@ -173,6 +182,7 @@ def record_standalone(
             with conn.cursor() as cur:
                 cur.execute(_INSERT_SQL, params)
             conn.commit()
+        _count(action, success)
     except Exception as exc:
         logger.error(
             "НЕ ЗАПИСАНО В ЖУРНАЛ ДЕЙСТВИЙ (%s): %s",

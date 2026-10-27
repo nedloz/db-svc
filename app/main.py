@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from contextlib import asynccontextmanager
@@ -9,6 +10,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.metrics import setup_metrics
+from app.services.corpus_stats import refresh_corpus_counts
 from app.core.auth import auth_is_disabled, require_auth, verify_auth_configuration
 from app.routes.db import router as db_router
 from app.routes.export import router as export_router
@@ -42,6 +45,19 @@ def _wait_for_db() -> dict:
             )
             time.sleep(DB_WAIT_DELAY_SEC)
     return status
+
+
+CORPUS_COUNTS_INTERVAL_SEC = int(os.getenv("CORPUS_COUNTS_INTERVAL_SEC", "60"))
+
+
+async def _corpus_counts_loop() -> None:
+    """Периодически обновляет размер корпуса и графа для метрик, не нагружая БД на каждый сбор."""
+    while True:
+        try:
+            await asyncio.to_thread(refresh_corpus_counts)
+        except Exception:
+            logger.warning("Не удалось обновить размер корпуса для метрик", exc_info=True)
+        await asyncio.sleep(CORPUS_COUNTS_INTERVAL_SEC)
 
 
 @asynccontextmanager
@@ -92,10 +108,13 @@ async def lifespan(app: FastAPI):
             DB_WAIT_ATTEMPTS,
             db_status.get("error"),
         )
+    corpus_task = asyncio.create_task(_corpus_counts_loop())
     yield
+    corpus_task.cancel()
 
 
 app = FastAPI(title=APP_NAME, lifespan=lifespan)
+setup_metrics(app)
 
 
 @app.middleware("http")

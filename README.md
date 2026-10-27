@@ -460,3 +460,14 @@ auth-svc, а db-svc проверяет подпись (`app/user_context.py`). �
 политикой «кто что может» (`main/infra/mtls`). Модуль одинаков в chat-svc, db-svc,
 graph-rag-svc и ingest-worker, менять его нужно во всех сразу. Включение и проверка —
 `main/infra/pki/README.md`, раздел «mTLS между сервисами».
+
+## Метрики
+
+`GET /metrics` отдаёт Prometheus (за mTLS - только пользователю `prometheus`, политика в `infra/mtls/db-svc.conf`). Кроме HTTP-метрик (`http_requests_total`, `http_request_duration_seconds`, `http_requests_inprogress`; метка `handler` - шаблон маршрута) сервис отдаёт бизнес-метрики с префиксом `pochemuchnik_`. Код: `app/metrics.py`, тесты: `tests/`. Общая картина и дашборды - `infra/observability/README.md` в корневом репозитории.
+
+| Метрика | Что считает |
+| :-- | :-- |
+| `admin_actions_total{action,result}` | записи журнала `audit.db_actions` по действию; `result` - `success`, `failure` |
+| `imports_total{kind,result}` | импорты (`csv`, `dataset`) |
+| `corpus_objects{kind}` | размер корпуса: `documents`, `chunks`, `graph_nodes`, `graph_edges`; обновляется раз в `CORPUS_COUNTS_INTERVAL_SEC` (60 с) |
+
