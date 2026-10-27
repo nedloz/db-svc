@@ -15,7 +15,8 @@ from app.services.corpus_stats import refresh_corpus_counts
 from app.core.auth import auth_is_disabled, require_auth, verify_auth_configuration
 from app.routes.db import router as db_router
 from app.routes.export import router as export_router
-from app.routes.graph import router as graph_router
+# GraphRAG отключён, см. спецификацию 2026-10-27
+# from app.routes.graph import router as graph_router
 from app.routes.jobs import router as jobs_router
 from app.routes.minio import router as minio_router
 from app.services import audit
@@ -175,5 +176,6 @@ app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__
 app.include_router(db_router, prefix="/api/db", tags=["db"])
 app.include_router(minio_router, prefix="/api/minio", tags=["minio"])
 app.include_router(jobs_router, prefix="/api/jobs", tags=["jobs"])
-app.include_router(graph_router, prefix="/api/graph", tags=["graph"])
+# GraphRAG отключён, см. спецификацию 2026-10-27
+# app.include_router(graph_router, prefix="/api/graph", tags=["graph"])
 app.include_router(export_router, prefix="/api/export", tags=["export"])

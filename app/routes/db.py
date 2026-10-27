@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from contextlib import asynccontextmanager
 from typing import Any
+
+import psycopg
 
 from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -26,7 +30,14 @@ from app.services.catalog import (
 from app.services.csv_import import import_csv_with_report
 from app.services.import_pipeline import dataset_status, run_dataset_import
 from app.services.jobs import create_job, get_job, is_cancelled, mark_running, update_job
-from app.services.pg import check_db_connection, get_conn
+from app.services.pg import PgConfig, check_db_connection, get_conn
+from app.services.quick_answers_import import (
+    ImportFileError,
+    import_links,
+    import_quick_answers,
+    parse_links_txt,
+    parse_quick_answers_xlsx,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -227,6 +238,72 @@ async def import_csv(
         update_job(job_id, status="failed", error=str(exc), finished=True)
         audit.record_failure("import.csv", schema=schema_name, table=table, error=str(exc), details={"job_id": job_id, "mode": mode, "filename": file.filename})
         raise HTTPException(status_code=500, detail=f"Ошибка CSV импорта: {str(exc)}")
+
+
+# Предел размера загружаемого файла быстрых ответов / ссылок (оба файла — килобайты).
+IMPORT_MAX_BYTES = int(os.getenv("DBSVC_IMPORT_MAX_BYTES", str(10 * 1024 * 1024)))
+
+
+@asynccontextmanager
+async def open_import_session():
+    """Асинхронное соединение на одну транзакцию: выход без ошибки коммитит, ошибка откатывает."""
+    async with await psycopg.AsyncConnection.connect(PgConfig.from_env().conninfo()) as conn:
+        yield conn
+
+
+async def _read_upload(file: UploadFile, ext: str) -> bytes:
+    name = (file.filename or "").lower()
+    if not name.endswith(ext):
+        raise HTTPException(status_code=415, detail=f"Ожидается файл {ext}")
+    data = await file.read(IMPORT_MAX_BYTES + 1)
+    if len(data) > IMPORT_MAX_BYTES:
+        raise HTTPException(status_code=413, detail=f"Файл больше {IMPORT_MAX_BYTES} байт")
+    if not data.strip():
+        raise HTTPException(status_code=400, detail="Файл пустой")
+    return data
+
+
+async def _run_library_import(action: str, table: str, filename: str | None, parse, importer) -> dict[str, Any]:
+    """Разбор файла и запись одной транзакцией; результат и сбой попадают в журнал действий."""
+    try:
+        rows = parse()
+    except ImportFileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        async with open_import_session() as session:
+            result = await importer(session, rows)
+    except Exception as exc:
+        logger.exception("%s failed", action)
+        audit.record_failure(action, schema="library", table=table, error=str(exc), details={"filename": filename})
+        raise HTTPException(status_code=500, detail=f"Ошибка импорта: {exc}")
+    audit.record_standalone(
+        action, schema="library", table=table,
+        details={"filename": filename, "rows": len(rows), "result": result},
+    )
+    return result
+
+
+# Фиксированные пути импорта стоят выше generic /{schema}/{table}/..., иначе они попадут в него
+# (см. предупреждение над /import/dataset/status).
+@router.post("/library/quick-answers/import")
+async def import_library_quick_answers(file: UploadFile = File(...)) -> dict[str, Any]:
+    data = await _read_upload(file, ".xlsx")
+    return await _run_library_import(
+        "import.quick_answers", "quick_answers", file.filename,
+        lambda: parse_quick_answers_xlsx(data), import_quick_answers,
+    )
+
+
+@router.post("/library/links/import")
+async def import_library_links(file: UploadFile = File(...)) -> dict[str, Any]:
+    data = await _read_upload(file, ".txt")
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="Файл должен быть в кодировке UTF-8")
+    return await _run_library_import(
+        "import.links", "links", file.filename, lambda: parse_links_txt(text), import_links,
+    )
 
 
 @router.get("/{schema}/tables")
