@@ -45,14 +45,25 @@
   align-self: center;
 }
 
+/* Статусы занимают первые две колонки и прижаты вправо: ширину первой колонки задают
+   вкладки во второй строке, и с каждой новой вкладкой статусам оставалось меньше места —
+   они переносились на вторую строку. Заголовок слева узкий и их не задевает. */
 .app-header__status-group {
-  grid-column: 2;
+  grid-column: 1 / 3;
   grid-row: 1;
   display: flex;
   align-items: center;
   gap: var(--sp-5);
   justify-self: end;
   flex-wrap: wrap;
+}
+
+/* На узком экране первая колонка сжимается до заголовка, и статусы налезли бы на него —
+   возвращаем их в свою колонку, где они переносятся. */
+@media (max-width: 1200px) {
+  .app-header__status-group {
+    grid-column: 2;
+  }
 }
 
 .app-header__actions {
@@ -74,6 +85,7 @@
   grid-row: 2;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--sp-4);
 }
 
