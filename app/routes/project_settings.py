@@ -1,8 +1,14 @@
 """Страница «Настройки проекта» (только чтение): активный LLM, эмбеддинги, GraphRAG.
 
+Показывается то, что записано в файле, а не живое состояние прокси. Границы: (1) страница
+не видит копию «последней корректной» конфигурации в памяти llm-proxy: если файл стал
+некорректным, прокси продолжает работать по прежней, а страница покажет unknown; (2) ключ
+ROUTER_KEY ей недоступен, поэтому режим router без ключа (прокси отвечает 503) всё равно
+отображается как router; (3) доступность upstream не проверяется.
+
 Режим и модель LLM берутся из того же config.json, который llm-proxy перечитывает на каждом
 запросе (том llm_proxy_config, в db-svc он смонтирован только на чтение), поэтому страница
-показывает действующие настройки, а не копию из переменных окружения. Ключей и адресов
+показывает настройки из файла, а не копию из переменных окружения. Ключей и адресов
 (url) в ответ не попадает ничего.
 """
 
@@ -11,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any
 
 from fastapi import APIRouter
@@ -21,6 +28,8 @@ router = APIRouter()
 
 LLM_CONFIG_PATH = "/etc/llm-proxy/config.json"
 MODES = ("router", "ollama")
+# Адрес раздела: схема http(s):// и непустой хост без пробелов; зеркало проверки в infra/llm-proxy/llm.js.
+URL_RE = re.compile(r"^https?://[^/\s]+")
 UNKNOWN = {"mode": "unknown", "model": None}
 
 DEFAULT_EMBEDDER_MODEL = "intfloat/multilingual-e5-base"
@@ -42,7 +51,7 @@ def validate_llm_config(cfg: Any) -> str | None:
                 or not isinstance(section.get("model"), str):
             return f"нужен раздел {name} со строками url и model"
     active = cfg[cfg["mode"]]
-    if not active["url"].startswith(("http://", "https://")):
+    if not URL_RE.match(active["url"]):
         return f"{cfg['mode']}.url должен начинаться с http:// или https://"
     if not active["model"]:
         return f"{cfg['mode']}.model пуст"

@@ -147,3 +147,30 @@ def test_read_llm_config_function(tmp_path):
     assert read_llm_config(str(p)) == {"mode": "unknown", "model": None}
     write(p, cfg("ollama", ollama_model="m1"))
     assert read_llm_config(str(p)) == {"mode": "ollama", "model": "m1"}
+
+
+def _with_url(url, mode="router"):
+    c = cfg(mode)
+    c[mode]["url"] = url
+    return c
+
+
+@pytest.mark.parametrize("url", ["https://", "http:// x", "http://", "ftp://host", "", 42, None])
+def test_bad_active_url_is_unknown(tmp_path, url):
+    from app.routes.project_settings import read_llm_config
+
+    p = tmp_path / "c.json"
+    write(p, _with_url(url))
+    assert read_llm_config(str(p)) == {"mode": "unknown", "model": None}
+
+
+@pytest.mark.parametrize("url,mode", [
+    ("https://api.example.com/v1", "router"),
+    ("http://ollama:11434/v1", "ollama"),
+])
+def test_good_active_url_is_accepted(tmp_path, url, mode):
+    from app.routes.project_settings import read_llm_config
+
+    p = tmp_path / "c.json"
+    write(p, _with_url(url, mode))
+    assert read_llm_config(str(p))["mode"] == mode
