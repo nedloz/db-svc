@@ -266,7 +266,8 @@ async def _read_upload(file: UploadFile, ext: str) -> bytes:
 async def _run_library_import(action: str, table: str, filename: str | None, parse, importer) -> dict[str, Any]:
     """Разбор файла и запись одной транзакцией; результат и сбой попадают в журнал действий."""
     try:
-        rows = parse()
+        # openpyxl грузит процессор, поэтому разбор уходит из цикла событий (как в import_csv).
+        rows = await run_in_threadpool(parse)
     except ImportFileError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     try:
@@ -274,11 +275,15 @@ async def _run_library_import(action: str, table: str, filename: str | None, par
             result = await importer(session, rows)
     except Exception as exc:
         logger.exception("%s failed", action)
-        audit.record_failure(action, schema="library", table=table, error=str(exc), details={"filename": filename})
+        await run_in_threadpool(
+            lambda: audit.record_failure(action, schema="library", table=table, error=str(exc), details={"filename": filename})
+        )
         raise HTTPException(status_code=500, detail=f"Ошибка импорта: {exc}")
-    audit.record_standalone(
-        action, schema="library", table=table,
-        details={"filename": filename, "rows": len(rows), "result": result},
+    await run_in_threadpool(
+        lambda: audit.record_standalone(
+            action, schema="library", table=table,
+            details={"filename": filename, "rows": len(rows), "result": result},
+        )
     )
     return result
 

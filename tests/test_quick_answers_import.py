@@ -343,6 +343,46 @@ def test_quick_answers_endpoint_not_swallowed_by_generic_route(api):
     assert api.session.variants_of("Q1?") == {"q1", "вариант один"}
 
 
+def test_parse_and_audit_run_off_event_loop(api, monkeypatch):
+    """Разбор xlsx (CPU) и синхронный журнал не должны выполняться в потоке цикла событий."""
+    import threading
+    from app.routes import db as db_routes
+
+    threads = {}
+    loop_thread = []
+
+    real_parse = db_routes.parse_quick_answers_xlsx
+
+    def parse(data):
+        threads["parse"] = threading.get_ident()
+        return real_parse(data)
+
+    def audit_rec(action, **kw):
+        threads["audit"] = threading.get_ident()
+
+    real_open = db_routes.open_import_session
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def open_session():
+        loop_thread.append(threading.get_ident())
+        async with real_open() as s:
+            yield s
+
+    monkeypatch.setattr(db_routes, "parse_quick_answers_xlsx", parse)
+    monkeypatch.setattr(db_routes.audit, "record_standalone", audit_rec)
+    monkeypatch.setattr(db_routes, "open_import_session", open_session)
+    # real_open здесь уже подменён фикстурой api на фейковую сессию
+    r = api.post(
+        "/api/db/library/quick-answers/import", headers=AUTH,
+        files={"file": ("a.xlsx", make_xlsx([["Q1?", "A1", "в"]]), "application/octet-stream")},
+    )
+    assert r.status_code == 200, r.text
+    assert threads["parse"] != loop_thread[0]
+    assert threads["audit"] != loop_thread[0]
+
+
 def test_links_endpoint(api):
     r = api.post(
         "/api/db/library/links/import", headers=AUTH,
