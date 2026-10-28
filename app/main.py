@@ -19,6 +19,7 @@ from app.routes.export import router as export_router
 # from app.routes.graph import router as graph_router
 from app.routes.jobs import router as jobs_router
 from app.routes.minio import router as minio_router
+from app.routes.project_settings import router as project_settings_router
 from app.services import audit
 from app.services.jobs import jobs_table_exists
 from app.services.pg import check_db_connection
@@ -173,6 +174,8 @@ async def index():
 
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
+# Фиксированный путь /settings/project стоит выше db_router, иначе его перехватит generic /{schema}/{table}.
+app.include_router(project_settings_router, prefix="/api/db", tags=["db"])
 app.include_router(db_router, prefix="/api/db", tags=["db"])
 app.include_router(minio_router, prefix="/api/minio", tags=["minio"])
 app.include_router(jobs_router, prefix="/api/jobs", tags=["jobs"])

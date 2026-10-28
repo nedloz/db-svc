@@ -1,0 +1,20 @@
+/* Вкладка «Настройки проекта»: список «название — значение», только чтение. */
+.settings-view {
+  grid-column: 1 / -1;
+}
+
+.settings-view__list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--sp-3) var(--sp-5);
+  margin: 0;
+}
+
+.settings-view__list dt {
+  color: var(--text-muted, inherit);
+}
+
+.settings-view__list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
