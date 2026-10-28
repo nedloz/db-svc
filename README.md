@@ -34,7 +34,7 @@ db-svc ходит напрямую в общий Postgres и в MinIO — не �
 - **`core`** — справочники вуза: universities, campuses, faculties, buildings, programs.
 - **`auth`** — пользователи и токены (владелец `auth-svc`, здесь только читаются/редактируются вручную).
 - **`chat`** — история переписок и фидбек (владелец `chat-svc`).
-- **`library`** — база знаний: documents, chunks, chunk_embeddings (`VECTOR(1024)`), document_files, document_relations, contacts, places. Основная зона редактирования через db-svc.
+- **`library`** — база знаний: documents, chunks, chunk_embeddings (`VECTOR(768)`, модель `intfloat/multilingual-e5-base`), quick_answers и quick_answer_variants (быстрые ответы), links (полезные ссылки), document_files, document_relations, contacts, places. Основная зона редактирования через db-svc.
 - **`public.dbsvc_jobs`** — служебная таблица самого db-svc для отслеживания прогресса импортов. Создаётся `init.sql` / `migrations/008`, а не сервисом: у его роли нет права на DDL, при старте db-svc только проверяет её наличие.
 - **`audit.db_actions`** — журнал действий администратора (см. ниже). db-svc может в неё только добавлять и читать.
 
@@ -174,6 +174,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 | GET    | `/{schema}/{table}/relations/inbound` |
 | GET    | `/{schema}/{table}/{pk}/dependencies` |
 | GET    | `/{schema}/{table}/export.csv`        |
+| POST   | `/library/quick-answers/import`       |
+| POST   | `/library/links/import`               |
 
 ## minio — `/api/minio/*` ([app/routes/minio.py](app/routes/minio.py))
 
@@ -194,6 +196,31 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 | ------ | ------------- |
 | GET    | `/{job_id}` |
 | DELETE | `/{job_id}` |
+
+---
+
+## Импорт быстрых ответов и ссылок
+
+Источники пайплайна ноутбука (`graph-rag-svc`, §4.1 его README) загружаются в базу отсюда, файлом
+в теле `multipart/form-data` (поле `file`). Через nginx — с админ-сессией по адресу
+`/admin/api/db/...`, напрямую — с `Authorization: Bearer <DBSVC_ADMIN_TOKEN>`.
+
+- `POST /api/db/library/quick-answers/import` — Excel (`.xlsx`, например `HSE_Answers_RU.xlsx`).
+  Лист «Ответы» (или первый), колонки ищутся по заголовкам: «Основной вопрос», «Ответ на русском»,
+  «Варианты вопроса на русском» (варианты через перевод строки или `;`; колонка необязательна).
+  Основной вопрос и каждый вариант — отдельные строки `library.quick_answer_variants`, уже
+  нормализованные по правилу ноутбука (`[^a-zA-Zа-яА-Я0-9\s]` вырезается, нижний регистр;
+  буква «ё» тоже вырезается) — так же нормализует вопрос `graph-rag-svc`. Повторный импорт
+  синхронизирует варианты вопросов из файла (лишние удаляются, новые добавляются); вопросы,
+  которых в файле нет, не трогаются; при смене ответа векторы его вариантов сбрасываются.
+- `POST /api/db/library/links/import` — текст UTF-8 (`all_links.txt`): строки «описание. URL»,
+  ссылки с `http://` тоже принимаются; строки без URL пропускаются. Ключ — `url`: новое
+  описание сбрасывает вектор ссылки.
+
+Ответ: `{"created", "updated", "skipped"}`: пропускаются вопросы без ответа или без текста
+вопроса, ссылки без описания и повторы одного URL в файле. Импорт идёт одной транзакцией и пишется в журнал действий. Эмбеддинги db-svc не
+считает: строки ложатся с `embedding = NULL`, триггер будит `ingest-worker`, и тот досчитывает
+векторы. Пока вектора нет, строка в поиске не участвует.
 
 ---
 
@@ -326,19 +353,26 @@ auth-svc, а db-svc проверяет подпись (`app/user_context.py`). �
 
 Формат — zip с JSONL по файлу на таблицу и `manifest.json`, где записаны версия схемы, дата,
 число строк по таблицам, а для чанков ещё модель эмбеддингов и объявленный тип колонки
-(`vector(1024)`). Не `pg_dump` намеренно: выгрузка должна читаться без Postgres и переноситься
+(`vector(768)`). Не `pg_dump` намеренно: выгрузка должна читаться без Postgres и переноситься
 между стендами — соседняя команда поднимает свой экземпляр на тех же данных. Векторы
 приводятся к тексту (`embedding::text`) и восстанавливаются разбором строки.
 
 Эндпоинты — `GET /api/export/graph` и `GET /api/export/chunks?embeddings=false`. Префикс
-отдельный, а не `/api/graph/export`: под `/api/graph/` висит сквозной прокси в graph-rag-svc,
-и локальный путь ушёл бы туда.
+отдельный, а не `/api/graph/export`: под `/api/graph/` висел сквозной прокси в graph-rag-svc
+(сейчас отключён, см. ниже).
 
 Обратная загрузка пока не сделана — см. TODO в `services/README.md`.
 
 ---
 
 ## Схема `graph`: редактировать через db-svc не следует
+
+> **GraphRAG отключён.** Маршруты `/api/graph/*` (прокси в `/internal/graph/*` graph-rag-svc) не
+> подключены (`app/main.py`, закомментированный `graph_router`) и отвечают `404`; в graph-rag-svc
+> этих маршрутов тоже нет. Вкладка «Граф» админки (`app/static/js/api/graph.js`,
+> `app/static/js/views/graph/*`) по-прежнему обращается к `/api/graph/*` и показывает ошибки,
+> пока интерфейс не почистят. Кнопки выгрузки на этой вкладке (`/api/export/*`) работают. Текст
+> ниже описывает отключённое поведение.
 
 В проекте появилась схема `graph` (сущности, алиасы, связи, провенанс), которую наполняет
 `graph-rag-svc`. Формально её таблицы доступны через общий CRUD db-svc — **но пользоваться
@@ -453,7 +487,7 @@ auth-svc, а db-svc проверяет подпись (`app/user_context.py`). �
 
 ## Вызовы других сервисов по mTLS
 
-Так db-svc вызывает graph-rag-svc (`/internal/graph/*`, курирование графа).
+Так db-svc вызывал graph-rag-svc (`/internal/graph/*`, курирование графа; сейчас отключено вместе с GraphRAG).
 
 Если заданы `SERVICE_MTLS_CERT`, `SERVICE_MTLS_KEY` и `SERVICE_MTLS_CA`, сервис предъявляет свой
 сертификат внутреннего CA (CN равен имени сервиса) и проверяет сервер. Контекст TLS собирается в
